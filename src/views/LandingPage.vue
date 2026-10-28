@@ -3,11 +3,10 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import ApiService from '@/services/api'
 
 /* ---------- Config ---------- */
-const LANDING_URL = 'https://anniepetars.com' // your landing page
+const LANDING_URL = 'https://anniepetars.com'
 const WHATSAPP = 'https://wa.me/2348084903580'
 const PAGE_SIZE = 24
 const LS_CART = 'ap_cart_v1'
-const LS_WISH = 'ap_wish_v1'
 
 /* ---------- State ---------- */
 const collections = ref([])
@@ -18,24 +17,20 @@ const loadError = ref(false)
 const hasMore = ref(false)
 const offset = ref(0)
 
-const searchOpen = ref(false)
 const searchQuery = ref('')
 const activeCollection = ref('')
-const featuredOnly = ref(false)
-const newOnly = ref(false)
-const sortBy = ref('featured')
 
 const cartOpen = ref(false)
-const wishOpen = ref(false)
 const cart = ref([])
-const wishlist = ref([])
 
-const selected = ref(null)
-const activeImage = ref(0)
+/* Two "pages": list and product, driven by the URL hash so the back button works */
+const route = ref({ name: 'list', slug: '' })
+
 const pickSize = ref('')
 const pickColour = ref('')
 const pickQty = ref(1)
-const modalError = ref('')
+const activeImage = ref(0)
+const pageError = ref('')
 
 const toast = ref('')
 let toastTimer
@@ -47,7 +42,7 @@ const formatKobo = (kobo) =>
   new Intl.NumberFormat('en-NG', {
     style: 'currency',
     currency: 'NGN',
-    maximumFractionDigits: 0
+    minimumFractionDigits: 2
   }).format((kobo || 0) / 100)
 
 const text = (row, ...keys) => {
@@ -78,11 +73,7 @@ function normalizeImages(row) {
     .map((i) =>
       typeof i === 'string'
         ? { url: i, primary: false, order: 0 }
-        : {
-            url: text(i, 'image_url', 'url'),
-            primary: !!i.is_primary,
-            order: Number(i.sort_order || 0)
-          }
+        : { url: text(i, 'image_url', 'url'), primary: !!i.is_primary, order: Number(i.sort_order || 0) }
     )
     .filter((i) => i.url)
     .sort((a, b) => Number(b.primary) - Number(a.primary) || a.order - b.order)
@@ -106,10 +97,11 @@ function normalizeProduct(row, index) {
   const col = row.collection && typeof row.collection === 'object' ? row.collection : {}
   const colName = text(col, 'name') || text(row, 'collection_name')
   const images = normalizeImages(row)
+  const name = text(row, 'name', 'title') || 'AnniePetars piece'
   return {
     id: row.id || `p-${index}`,
-    name: text(row, 'name', 'title') || 'AnniePetars piece',
-    slug: text(row, 'slug') || slugify(text(row, 'name')),
+    name,
+    slug: text(row, 'slug') || slugify(name),
     short: text(row, 'short_description'),
     description: text(row, 'description'),
     fabric: text(row, 'fabric'),
@@ -120,26 +112,24 @@ function normalizeProduct(row, index) {
     image: images[0] || '',
     collectionName: colName,
     collectionSlug: text(col, 'slug') || text(row, 'collection_slug') || slugify(colName),
-    featured: !!row.is_featured,
     isNew: !!row.is_new_arrival,
     customisable: !!row.is_customisable,
     backorder: !!row.allow_backorder,
-    variants,
-    publishedAt: row.published_at || row.created_at || ''
+    variants
   }
 }
 
 const hasVariants = (p) => p.variants.length > 0
-const productInStock = (p) =>
-  !hasVariants(p) || p.backorder || p.variants.some((v) => v.stock > 0)
+const productInStock = (p) => !hasVariants(p) || p.backorder || p.variants.some((v) => v.stock > 0)
 const onSale = (p) => p.compareAt && p.compareAt > p.price
+const needsChoice = (p) =>
+  hasVariants(p) && (p.variants.length > 1 || p.variants[0].size || p.variants[0].colour)
 
 /* ---------- Data ---------- */
 function buildQuery(extraOffset = 0) {
   const params = new URLSearchParams()
   if (activeCollection.value) params.set('collection', activeCollection.value)
   if (searchQuery.value.trim()) params.set('q', searchQuery.value.trim())
-  if (featuredOnly.value) params.set('featured', 'true')
   params.set('limit', String(PAGE_SIZE))
   params.set('offset', String(extraOffset))
   return params.toString()
@@ -158,13 +148,7 @@ async function loadCatalog({ append = false } = {}) {
     if (id !== requestId) return
     const root = Array.isArray(res) ? { products: res } : res?.data || res || {}
     if (Array.isArray(root.collections) && root.collections.length) {
-      collections.value = root.collections.map((c) => ({
-        id: c.id,
-        slug: c.slug,
-        name: c.name,
-        tagline: c.tagline || c.description || '',
-        image: c.image_url || ''
-      }))
+      collections.value = root.collections.map((c) => ({ id: c.id, slug: c.slug, name: c.name }))
     }
     const rows = (root.products || []).map(normalizeProduct)
     products.value = append ? [...products.value, ...rows] : rows
@@ -184,40 +168,49 @@ async function loadCatalog({ append = false } = {}) {
   }
 }
 
-const visibleProducts = computed(() => {
-  let list = [...products.value]
-  if (newOnly.value) list = list.filter((p) => p.isNew)
-  if (sortBy.value === 'price-low') list.sort((a, b) => a.price - b.price)
-  else if (sortBy.value === 'price-high') list.sort((a, b) => b.price - a.price)
-  else if (sortBy.value === 'name') list.sort((a, b) => a.name.localeCompare(b.name))
-  else if (sortBy.value === 'newest')
-    list.sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)))
-  return list
-})
-
-const activeCollectionData = computed(() =>
-  collections.value.find((c) => c.slug === activeCollection.value)
-)
-const headingTitle = computed(() => activeCollectionData.value?.name || 'All pieces')
-const filtersActive = computed(
-  () => !!(activeCollection.value || searchQuery.value || featuredOnly.value || newOnly.value)
-)
-
 watch(searchQuery, () => {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => loadCatalog(), 350)
 })
-watch([activeCollection, featuredOnly], () => loadCatalog())
+watch(activeCollection, () => loadCatalog())
 
+const filtersActive = computed(() => !!(activeCollection.value || searchQuery.value))
 function resetFilters() {
   activeCollection.value = ''
   searchQuery.value = ''
-  featuredOnly.value = false
-  newOnly.value = false
-  sortBy.value = 'featured'
 }
 
-/* ---------- Product modal ---------- */
+/* ---------- Routing (hash based) ---------- */
+function parseHash() {
+  const m = location.hash.match(/^#\/product\/(.+)$/)
+  route.value = m ? { name: 'product', slug: decodeURIComponent(m[1]) } : { name: 'list', slug: '' }
+  window.scrollTo({ top: 0 })
+}
+function goProduct(p) {
+  location.hash = `#/product/${encodeURIComponent(p.slug || p.id)}`
+}
+function goList() {
+  history.pushState('', document.title, location.pathname + location.search)
+  parseHash()
+}
+
+const selected = computed(() =>
+  route.value.name === 'product'
+    ? products.value.find((p) => p.slug === route.value.slug || String(p.id) === route.value.slug) || null
+    : null
+)
+
+watch(selected, (p) => {
+  if (!p) return
+  activeImage.value = 0
+  pickQty.value = 1
+  pageError.value = ''
+  const first = p.variants.find((v) => v.stock > 0) || p.variants[0]
+  pickSize.value = first?.size || ''
+  pickColour.value = first?.colour || ''
+}, { immediate: true })
+
+/* ---------- Product page selection ---------- */
 const sizes = computed(() =>
   selected.value ? [...new Set(selected.value.variants.map((v) => v.size).filter(Boolean))] : []
 )
@@ -235,58 +228,46 @@ const matchedVariant = computed(() => {
     ) || null
   )
 })
-const modalPrice = computed(() => matchedVariant.value?.price ?? selected.value?.price ?? 0)
-const modalStock = computed(() => {
+const pagePrice = computed(() => matchedVariant.value?.price ?? selected.value?.price ?? 0)
+const pageStock = computed(() => {
   const p = selected.value
   if (!p) return 0
   if (!hasVariants(p)) return 99
   return matchedVariant.value ? matchedVariant.value.stock : 0
 })
-const modalSoldOut = computed(() => {
+const pageSoldOut = computed(() => {
   const p = selected.value
   if (!p || p.backorder) return false
   return hasVariants(p) && !!matchedVariant.value && matchedVariant.value.stock <= 0
 })
-const sizeAvailable = (s) => {
-  const p = selected.value
-  if (p.backorder) return true
-  return p.variants.some(
-    (v) => v.size === s && v.stock > 0 && (!pickColour.value || v.colour === pickColour.value)
-  )
-}
-const colourAvailable = (c) => {
-  const p = selected.value
-  if (p.backorder) return true
-  return p.variants.some(
-    (v) => v.colour === c && v.stock > 0 && (!pickSize.value || v.size === pickSize.value)
-  )
-}
+const maxPickQty = computed(() => (selected.value?.backorder ? 99 : Math.max(pageStock.value, 1)))
 
-function openProduct(p) {
-  selected.value = p
-  activeImage.value = 0
-  pickQty.value = 1
-  modalError.value = ''
-  const firstInStock = p.variants.find((v) => v.stock > 0) || p.variants[0]
-  pickSize.value = firstInStock?.size || ''
-  pickColour.value = firstInStock?.colour || ''
-}
-function closeProduct() {
-  selected.value = null
-}
-
-function quickAdd(p) {
-  if (hasVariants(p) && (p.variants.length > 1 || p.variants[0].size || p.variants[0].colour)) {
-    openProduct(p)
-    return
-  }
-  if (!productInStock(p)) return
-  addToCart(p, p.variants[0] || null, 1)
+function addFromPage() {
+  const p = selected.value
+  if (!p) return
+  if (hasVariants(p)) {
+    if ((sizes.value.length && !pickSize.value) || (colours.value.length && !pickColour.value)) {
+      pageError.value = 'Choose your size and colour first.'
+      return
+    }
+    if (!matchedVariant.value) {
+      pageError.value = 'That combination is not available.'
+      return
+    }
+    if (pageSoldOut.value) {
+      pageError.value = 'That option is sold out.'
+      return
+    }
+  } else if (!productInStock(p)) return
+  addToCart(p, matchedVariant.value, pickQty.value)
+  cartOpen.value = true
 }
 
 /* ---------- Cart ---------- */
 const cartCount = computed(() => cart.value.reduce((s, i) => s + i.qty, 0))
 const cartSubtotal = computed(() => cart.value.reduce((s, i) => s + i.price * i.qty, 0))
+const shipping = 0
+const cartTotal = computed(() => cartSubtotal.value + shipping)
 
 function addToCart(p, variant, qty) {
   const key = `${p.id}:${variant?.id || 'base'}`
@@ -308,29 +289,7 @@ function addToCart(p, variant, qty) {
       max
     })
   }
-  showToast(`${p.name} added to your bag`)
-}
-
-function addFromModal() {
-  const p = selected.value
-  if (!p) return
-  if (hasVariants(p)) {
-    if ((sizes.value.length && !pickSize.value) || (colours.value.length && !pickColour.value)) {
-      modalError.value = 'Choose your size and colour first.'
-      return
-    }
-    if (!matchedVariant.value) {
-      modalError.value = 'That combination is not available.'
-      return
-    }
-    if (modalSoldOut.value) {
-      modalError.value = 'That option is sold out.'
-      return
-    }
-  }
-  addToCart(p, matchedVariant.value, pickQty.value)
-  closeProduct()
-  cartOpen.value = true
+  showToast(`${p.name} added to your cart`)
 }
 
 function changeQty(key, delta) {
@@ -345,6 +304,19 @@ function changeQty(key, delta) {
   item.qty = next
 }
 const removeItem = (key) => (cart.value = cart.value.filter((i) => i.key !== key))
+const emptyCart = () => (cart.value = [])
+
+/* Grid-card steppers */
+const qtyInCart = (p) => cart.value.filter((i) => i.productId === p.id).reduce((s, i) => s + i.qty, 0)
+function cardPlus(p) {
+  if (!productInStock(p)) return
+  if (needsChoice(p)) return goProduct(p)
+  addToCart(p, p.variants[0] || null, 1)
+}
+function cardMinus(p) {
+  const lines = cart.value.filter((i) => i.productId === p.id)
+  if (lines.length) changeQty(lines[lines.length - 1].key, -1)
+}
 
 function beginCheckout() {
   // TODO: POST cart (variant ids + quantities only, never prices) to a create-order edge function.
@@ -353,22 +325,12 @@ function beginCheckout() {
   showToast('Checkout is not connected yet')
 }
 
-/* ---------- Wishlist ---------- */
-const isWished = (id) => wishlist.value.includes(id)
-function toggleWish(id) {
-  const adding = !isWished(id)
-  wishlist.value = adding ? [...wishlist.value, id] : wishlist.value.filter((x) => x !== id)
-  showToast(adding ? 'Saved to your wishlist' : 'Removed from your wishlist')
-}
-const wishedProducts = computed(() => products.value.filter((p) => wishlist.value.includes(p.id)))
-
 /* ---------- UI plumbing ---------- */
 function showToast(msg) {
   toast.value = msg
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => (toast.value = ''), 2400)
 }
-
 function safeLoad(key) {
   try {
     return JSON.parse(localStorage.getItem(key) || '[]')
@@ -377,244 +339,119 @@ function safeLoad(key) {
   }
 }
 watch(cart, (v) => { try { localStorage.setItem(LS_CART, JSON.stringify(v)) } catch {} }, { deep: true })
-watch(wishlist, (v) => { try { localStorage.setItem(LS_WISH, JSON.stringify(v)) } catch {} }, { deep: true })
-
-watch([cartOpen, wishOpen, selected], ([c, w, s]) => {
-  document.body.style.overflow = c || w || s ? 'hidden' : ''
-})
-
-const onKey = (e) => {
-  if (e.key !== 'Escape') return
-  cartOpen.value = false
-  wishOpen.value = false
-  searchOpen.value = false
-  selected.value = null
-}
 
 onMounted(() => {
   cart.value = safeLoad(LS_CART)
-  wishlist.value = safeLoad(LS_WISH)
-  window.addEventListener('keydown', onKey)
+  parseHash()
+  window.addEventListener('hashchange', parseHash)
   loadCatalog()
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKey)
-  document.body.style.overflow = ''
+  window.removeEventListener('hashchange', parseHash)
   clearTimeout(toastTimer)
   clearTimeout(searchTimer)
 })
 </script>
 
 <template>
-  <div class="ap min-h-screen bg-[#FFF7F1] text-[#2A1B16] antialiased overflow-x-hidden">
-    <!-- ANNOUNCEMENT -->
-    <div class="bg-[#2A1B16] px-6 py-2 text-center text-xs text-[#FFF7F1]">
-      Worldwide delivery to Nigeria, the UK, the USA and Ghana. Made-to-measure available on selected pieces.
-    </div>
-
-    <!-- HEADER -->
-    <header class="sticky top-0 z-40 border-b border-[#2A1B16]/10 bg-[#FFF7F1]/90 backdrop-blur-md">
-      <div class="mx-auto flex h-20 max-w-7xl items-center justify-between gap-4 px-6">
-        <a :href="LANDING_URL" class="flex flex-col leading-none" aria-label="AnniePetars home">
-          <span class="font-display text-2xl tracking-tight">AnniePetars</span>
-          <span class="mt-1 text-[10px] tracking-[.28em] text-[#5A413A]">THE SHOP</span>
+  <v-layout class="ap-layout">
+    <v-main class="ap min-h-screen bg-white text-[#2A1B16] antialiased">
+      <!-- HEADER -->
+      <header class="mx-auto flex max-w-6xl items-start justify-between gap-4 px-5 pb-2 pt-5">
+        <a href="#" class="flex flex-col gap-1" aria-label="AnniePetars shop home" @click.prevent="goList">
+          <span class="flex items-center gap-3">
+            <span class="flex h-10 w-10 items-center justify-center rounded-full bg-[#FFE6D6] font-display text-sm">AP</span>
+            <span class="font-semibold">AnniePetars</span>
+          </span>
         </a>
 
-        <nav class="hidden items-center gap-8 text-sm md:flex" aria-label="Shop navigation">
-          <a href="#shop" class="link-u">Shop all</a>
-          <a :href="`${LANDING_URL}#custom`" class="link-u">Custom outfits</a>
-          <a :href="LANDING_URL" class="link-u"><i class="fa-solid fa-arrow-left mr-1 text-xs"></i> Back to site</a>
-        </nav>
-
-        <div class="flex items-center gap-1">
-          <button class="icon-btn" aria-label="Search" @click="searchOpen = !searchOpen">
-            <i class="fa-solid fa-magnifying-glass"></i>
-          </button>
-          <button class="icon-btn relative" aria-label="Wishlist" @click="wishOpen = true">
-            <i class="fa-regular fa-heart"></i>
-            <span v-if="wishlist.length" class="count-dot">{{ wishlist.length }}</span>
-          </button>
-          <button class="icon-btn relative" aria-label="Shopping bag" @click="cartOpen = true">
-            <i class="fa-solid fa-bag-shopping"></i>
-            <span v-if="cartCount" class="count-dot pop">{{ cartCount }}</span>
+        <div class="flex items-center gap-5 pt-2 text-sm">
+          <a :href="LANDING_URL" class="hidden text-xs font-semibold tracking-wide sm:inline">BACK TO SITE</a>
+          <span class="hidden h-6 w-px bg-black/15 sm:inline-block"></span>
+          <button class="flex items-center gap-2 font-semibold" aria-label="Open cart" @click="cartOpen = true">
+            <span class="relative">
+              <i class="fa-solid fa-cart-shopping text-xl"></i>
+              <span v-if="cartCount" class="count-dot">{{ cartCount }}</span>
+            </span>
+            Cart
           </button>
         </div>
-      </div>
+      </header>
 
-      <transition name="drop">
-        <div v-if="searchOpen" class="border-t border-[#2A1B16]/10 bg-[#FFE6D6]">
-          <div class="mx-auto flex max-w-3xl items-center gap-3 px-6 py-4">
-            <i class="fa-solid fa-magnifying-glass text-[#C4623A]"></i>
-            <input
-              v-model="searchQuery"
-              type="search"
-              autofocus
-              placeholder="Search by name, fabric or occasion"
-              aria-label="Search products"
-              class="field !bg-transparent !py-2"
-            />
-            <button class="icon-btn" aria-label="Close search" @click="searchOpen = false">
-              <i class="fa-solid fa-xmark"></i>
-            </button>
-          </div>
-        </div>
-      </transition>
-    </header>
+      <!-- ============ PAGE 1: LIST ============ -->
+      <section v-if="route.name === 'list'" class="mx-auto max-w-6xl px-5 pb-20 pt-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <label class="search">
+            <i class="fa-solid fa-magnifying-glass text-[#5A413A]"></i>
+            <input v-model="searchQuery" type="search" placeholder="What are you shopping for?" aria-label="Search products" />
+          </label>
 
-    <main id="shop">
-      <!-- INTRO BANNER -->
-      <section class="relative overflow-hidden">
-        <div class="blob blob-a"></div>
-        <div class="blob blob-b"></div>
-        <div class="relative mx-auto max-w-7xl px-6 pb-10 pt-14 md:pt-20">
-          <div class="flex flex-wrap items-end justify-between gap-8">
-            <div class="max-w-2xl">
-              <h1 class="font-display text-[clamp(2.6rem,6vw,5rem)] leading-[1] tracking-tight">
-                Pieces made to be <span class="italic text-[#E2784A]">worn</span> and remembered.
-              </h1>
-              <p class="mt-5 max-w-xl text-lg leading-relaxed text-[#5A413A]">
-                Ready-to-wear, bridal, Aso Ebi and more. Choose a ready piece, or ask us to make it to your measurements.
-              </p>
-            </div>
-            <a :href="`${LANDING_URL}#custom`" class="btn-ghost">Request a custom outfit</a>
-          </div>
-
-          <ul class="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <li v-for="t in [
-              { i: 'fa-truck-fast', t: 'Worldwide delivery' },
-              { i: 'fa-ruler-combined', t: 'Made-to-measure options' },
-              { i: 'fa-rotate-left', t: 'Easy returns on eligible pieces' },
-              { i: 'fa-lock', t: 'Secure checkout' }
-            ]" :key="t.t" class="flex items-center gap-3 text-sm">
-              <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#FFC4A3]">
-                <i :class="`fa-solid ${t.i}`"></i>
-              </span>
-              {{ t.t }}
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <!-- COLLECTION RAIL -->
-      <section class="border-y border-[#2A1B16]/10 bg-[#FFD9C2]/60" aria-label="Collections">
-        <div class="mx-auto max-w-7xl px-6 py-5">
-          <div class="no-scrollbar flex gap-3 overflow-x-auto pb-1">
-            <button class="chip" :class="{ on: !activeCollection }" @click="activeCollection = ''">
-              All pieces
-            </button>
-            <button
-              v-for="c in collections"
-              :key="c.slug"
-              class="chip"
-              :class="{ on: activeCollection === c.slug }"
-              @click="activeCollection = c.slug"
-            >
-              <img v-if="c.image" :src="c.image" alt="" class="h-7 w-7 rounded-full object-cover" />
-              {{ c.name }}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <!-- PRODUCTS -->
-      <section class="mx-auto max-w-7xl px-6 py-14">
-        <div class="mb-8 flex flex-wrap items-end justify-between gap-6">
-          <div>
-            <h2 class="font-display text-4xl leading-tight md:text-5xl">{{ headingTitle }}</h2>
-            <p v-if="activeCollectionData?.tagline" class="mt-2 max-w-xl text-[#5A413A]">
-              {{ activeCollectionData.tagline }}
-            </p>
-            <p v-else class="mt-2 text-sm text-[#5A413A]">
-              <template v-if="!loading">{{ visibleProducts.length }} {{ visibleProducts.length === 1 ? 'piece' : 'pieces' }}</template>
-            </p>
-          </div>
-
-          <div class="flex flex-wrap items-center gap-3">
-            <div class="seg">
-              <button :class="{ on: featuredOnly }" @click="featuredOnly = !featuredOnly">Featured</button>
-              <button :class="{ on: newOnly }" @click="newOnly = !newOnly">New arrivals</button>
-            </div>
-            <label class="flex items-center gap-2 text-sm">
-              <span class="text-[#5A413A]">Sort</span>
-              <select v-model="sortBy" aria-label="Sort products" class="field !w-auto !py-2 !pr-8">
-                <option value="featured">Featured</option>
-                <option value="newest">Newest</option>
-                <option value="price-low">Price: low to high</option>
-                <option value="price-high">Price: high to low</option>
-                <option value="name">Name</option>
-              </select>
-            </label>
-            <button v-if="filtersActive" class="link-u text-sm" @click="resetFilters">Clear filters</button>
-          </div>
+          <label class="filter">
+            <select v-model="activeCollection" aria-label="Filter by category">
+              <option value="">Filter by category</option>
+              <option v-for="c in collections" :key="c.slug" :value="c.slug">{{ c.name }}</option>
+            </select>
+            <i class="fa-solid fa-chevron-down pointer-events-none text-xs"></i>
+          </label>
         </div>
 
         <!-- Loading -->
-        <div v-if="loading" class="grid grid-cols-2 gap-x-4 gap-y-10 md:grid-cols-3 lg:grid-cols-4">
+        <div v-if="loading" class="mt-8 grid grid-cols-2 gap-x-5 gap-y-8 md:grid-cols-3 lg:grid-cols-4">
           <div v-for="n in 8" :key="n" class="skeleton">
-            <div class="aspect-[3/4] rounded-3xl bg-[#FFE6D6]"></div>
-            <div class="mt-4 h-4 w-3/4 rounded-full bg-[#FFE6D6]"></div>
+            <div class="aspect-square rounded-lg bg-[#FFE6D6]"></div>
+            <div class="mt-3 h-3 w-3/4 rounded-full bg-[#FFE6D6]"></div>
             <div class="mt-2 h-3 w-1/3 rounded-full bg-[#FFE6D6]"></div>
           </div>
         </div>
 
         <!-- Error -->
-        <div v-else-if="loadError" class="rounded-[2rem] bg-white/60 px-6 py-20 text-center">
+        <div v-else-if="loadError" class="mt-10 rounded-2xl bg-[#FFF7F1] px-6 py-16 text-center">
           <i class="fa-solid fa-triangle-exclamation text-3xl text-[#E2784A]"></i>
           <h3 class="mt-4 font-display text-3xl">We could not load the shop</h3>
-          <p class="mx-auto mt-2 max-w-md text-[#5A413A]">Check your connection and try again.</p>
-          <button class="btn-peach mt-6" @click="loadCatalog()">Try again</button>
+          <p class="mt-2 text-[#5A413A]">Check your connection and try again.</p>
+          <button class="btn-dark mt-6" @click="loadCatalog()">Try again</button>
         </div>
 
         <!-- Empty -->
-        <div v-else-if="!visibleProducts.length" class="rounded-[2rem] bg-white/60 px-6 py-20 text-center">
+        <div v-else-if="!products.length" class="mt-10 rounded-2xl bg-[#FFF7F1] px-6 py-16 text-center">
           <i class="fa-solid fa-shirt text-3xl text-[#E2784A]"></i>
           <h3 class="mt-4 font-display text-3xl">No pieces match yet</h3>
           <p class="mx-auto mt-2 max-w-md text-[#5A413A]">
-            Try a different search or collection. Looking for something specific? We can make it for you.
+            Try a different search or category. Looking for something specific? We can make it for you.
           </p>
           <div class="mt-6 flex flex-wrap justify-center gap-3">
-            <button class="btn-peach" @click="resetFilters">Show all pieces</button>
+            <button v-if="filtersActive" class="btn-dark" @click="resetFilters">Show all pieces</button>
             <a :href="`${LANDING_URL}#custom`" class="btn-ghost">Request a custom outfit</a>
           </div>
         </div>
 
         <!-- Grid -->
-        <div v-else class="grid grid-cols-2 gap-x-4 gap-y-10 md:grid-cols-3 lg:grid-cols-4">
-          <article v-for="p in visibleProducts" :key="p.id" class="group">
-            <div class="relative aspect-[3/4] cursor-pointer overflow-hidden rounded-3xl bg-[#FFE6D6]" @click="openProduct(p)">
+        <div v-else class="mt-8 grid grid-cols-2 gap-x-5 gap-y-9 md:grid-cols-3 lg:grid-cols-4">
+          <article v-for="p in products" :key="p.id" class="group flex flex-col">
+            <a :href="`#/product/${encodeURIComponent(p.slug || p.id)}`" class="relative block aspect-square overflow-hidden rounded-lg bg-[#FFE6D6]">
               <img v-if="p.image" :src="p.image" :alt="p.name" loading="lazy"
-                class="h-full w-full object-cover transition duration-700 group-hover:scale-105" />
-              <div v-else class="flex h-full items-center justify-center text-[#C4623A]/50">
+                class="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
+              <span v-else class="flex h-full items-center justify-center text-[#C4623A]/50">
                 <i class="fa-solid fa-image text-4xl"></i>
-              </div>
+              </span>
+              <span v-if="!productInStock(p)" class="badge absolute left-2 top-2 bg-[#2A1B16] text-white">Sold out</span>
+              <span v-else-if="onSale(p)" class="badge absolute left-2 top-2 bg-[#E2784A] text-white">Sale</span>
+            </a>
 
-              <div class="absolute left-3 top-3 flex flex-col items-start gap-1.5">
-                <span v-if="!productInStock(p)" class="badge bg-[#2A1B16] text-[#FFF7F1]">Sold out</span>
-                <span v-else-if="onSale(p)" class="badge bg-[#E2784A] text-white">Sale</span>
-                <span v-if="p.isNew" class="badge bg-white">New</span>
-                <span v-if="p.customisable" class="badge bg-[#FFC4A3]">Customisable</span>
-              </div>
+            <a :href="`#/product/${encodeURIComponent(p.slug || p.id)}`" class="mt-3 line-clamp-2 text-sm leading-snug text-[#5A413A] hover:text-[#2A1B16]">
+              {{ p.name }}
+            </a>
 
-              <button class="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-full bg-white/90 transition hover:scale-110"
-                :aria-label="isWished(p.id) ? 'Remove from wishlist' : 'Add to wishlist'"
-                @click.stop="toggleWish(p.id)">
-                <i :class="isWished(p.id) ? 'fa-solid fa-heart text-[#E2784A]' : 'fa-regular fa-heart'"></i>
-              </button>
-
-              <button v-if="productInStock(p)"
-                class="absolute inset-x-3 bottom-3 translate-y-0 rounded-full bg-[#2A1B16] py-3 text-sm font-semibold text-[#FFF7F1] transition hover:bg-[#E2784A] md:translate-y-[150%] md:group-hover:translate-y-0 md:focus:translate-y-0"
-                @click.stop="quickAdd(p)">
-                Add to bag
-              </button>
-            </div>
-
-            <div class="px-1 pt-4">
-              <h3 class="font-display text-xl leading-snug">{{ p.name }}</h3>
-              <p v-if="p.collectionName" class="mt-0.5 text-xs text-[#5A413A]">{{ p.collectionName }}</p>
-              <p class="mt-2 flex items-baseline gap-2">
-                <span class="font-semibold">{{ formatKobo(p.price) }}</span>
-                <span v-if="onSale(p)" class="text-xs text-[#5A413A] line-through">{{ formatKobo(p.compareAt) }}</span>
+            <div class="mt-2 flex items-center justify-between gap-2">
+              <p class="text-xs font-semibold">
+                {{ formatKobo(p.price) }}
+                <span v-if="onSale(p)" class="ml-1 font-normal text-[#5A413A] line-through">{{ formatKobo(p.compareAt) }}</span>
               </p>
+              <div class="stepper" :class="{ disabled: !productInStock(p) }">
+                <button aria-label="Remove one" :disabled="!qtyInCart(p)" @click="cardMinus(p)">−</button>
+                <span>{{ qtyInCart(p) }}</span>
+                <button aria-label="Add one" :disabled="!productInStock(p)" @click="cardPlus(p)">+</button>
+              </div>
             </div>
           </article>
         </div>
@@ -626,132 +463,40 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <!-- CUSTOM CTA -->
-      <section class="mx-auto max-w-7xl px-6 pb-24">
-        <div class="rounded-[2rem] bg-[#F59A6C] px-8 py-14 text-center md:py-16">
-          <h2 class="mx-auto max-w-2xl font-display text-3xl leading-tight md:text-5xl">
-            Can’t find your fit or style?
-          </h2>
-          <p class="mx-auto mt-3 max-w-lg">Send us your measurements and a reference photo. We confirm the design, price and timeline before we start.</p>
-          <div class="mt-7 flex flex-wrap justify-center gap-4">
-            <a :href="`${LANDING_URL}#custom`" class="btn-dark">Request a custom outfit</a>
-            <a :href="WHATSAPP" target="_blank" rel="noopener" class="btn-ghost">Chat on WhatsApp</a>
+      <!-- ============ PAGE 2: PRODUCT ============ -->
+      <section v-else class="mx-auto max-w-6xl px-5 pb-20 pt-4">
+        <nav class="mb-6 flex items-center gap-2 text-xs uppercase tracking-wide text-[#5A413A]" aria-label="Breadcrumb">
+          <a href="#" class="hover:text-[#2A1B16]" @click.prevent="goList">Home</a>
+          <span>/</span>
+          <span class="max-w-[16rem] truncate">{{ selected?.name || 'Product' }}</span>
+        </nav>
+
+        <div v-if="loading" class="grid gap-10 md:grid-cols-2">
+          <div class="aspect-square rounded-lg bg-[#FFE6D6] skeleton"></div>
+          <div class="space-y-4">
+            <div class="h-8 w-3/4 rounded-full bg-[#FFE6D6] skeleton"></div>
+            <div class="h-6 w-1/4 rounded-full bg-[#FFE6D6] skeleton"></div>
           </div>
         </div>
-      </section>
-    </main>
 
-    <!-- FOOTER -->
-    <footer class="bg-[#2A1B16] px-6 py-10 text-sm text-[#FFF7F1]">
-      <div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4">
-        <p>© {{ new Date().getFullYear() }} AnniePetars. All rights reserved.</p>
-        <div class="flex flex-wrap gap-6 text-[#FFC4A3]">
-          <a :href="LANDING_URL" class="hover:text-white">Main site</a>
-          <a :href="`${LANDING_URL}#contact`" class="hover:text-white">Contact</a>
-          <a :href="WHATSAPP" target="_blank" rel="noopener" class="hover:text-white">WhatsApp</a>
+        <div v-else-if="!selected" class="rounded-2xl bg-[#FFF7F1] px-6 py-16 text-center">
+          <h3 class="font-display text-3xl">We could not find that piece</h3>
+          <p class="mt-2 text-[#5A413A]">It may have been removed or sold out.</p>
+          <button class="btn-dark mt-6" @click="goList">Back to shop</button>
         </div>
-      </div>
-    </footer>
 
-    <!-- CART DRAWER -->
-    <transition name="drawer">
-      <div v-if="cartOpen" class="backdrop justify-end" @click.self="cartOpen = false">
-        <aside class="flex h-full w-full max-w-md flex-col bg-[#FFF7F1] shadow-2xl" aria-label="Shopping bag">
-          <div class="flex items-center justify-between border-b border-[#2A1B16]/10 px-6 py-5">
-            <h2 class="font-display text-3xl">Your bag <span class="font-sans text-sm text-[#5A413A]">({{ cartCount }})</span></h2>
-            <button class="icon-btn" aria-label="Close bag" @click="cartOpen = false"><i class="fa-solid fa-xmark"></i></button>
-          </div>
-
-          <div v-if="cart.length" class="flex-1 overflow-y-auto px-6">
-            <article v-for="i in cart" :key="i.key" class="grid grid-cols-[84px_1fr_auto] gap-4 border-b border-[#2A1B16]/10 py-5">
-              <img v-if="i.image" :src="i.image" :alt="i.name" class="h-28 w-[84px] rounded-2xl object-cover" />
-              <div v-else class="h-28 w-[84px] rounded-2xl bg-[#FFE6D6]"></div>
-              <div>
-                <h3 class="font-display text-lg leading-snug">{{ i.name }}</h3>
-                <p v-if="i.size || i.colour" class="mt-0.5 text-xs text-[#5A413A]">
-                  {{ [i.size && `Size ${i.size}`, i.colour].filter(Boolean).join(', ') }}
-                </p>
-                <p class="mt-1 text-sm font-semibold">{{ formatKobo(i.price) }}</p>
-                <div class="mt-3 inline-flex items-center rounded-full border border-[#2A1B16]/20">
-                  <button class="qty-btn" aria-label="Decrease quantity" @click="changeQty(i.key, -1)">−</button>
-                  <span class="w-6 text-center text-sm">{{ i.qty }}</span>
-                  <button class="qty-btn" aria-label="Increase quantity" @click="changeQty(i.key, 1)">+</button>
-                </div>
-              </div>
-              <button class="self-start p-1 text-[#5A413A] hover:text-[#E2784A]" aria-label="Remove item" @click="removeItem(i.key)">
-                <i class="fa-regular fa-trash-can"></i>
-              </button>
-            </article>
-          </div>
-
-          <div v-else class="flex flex-1 flex-col items-center justify-center px-6 text-center">
-            <span class="flex h-16 w-16 items-center justify-center rounded-full bg-[#FFC4A3] text-2xl"><i class="fa-solid fa-bag-shopping"></i></span>
-            <h3 class="mt-5 font-display text-3xl">Your bag is empty</h3>
-            <p class="mt-2 text-[#5A413A]">Pick a piece you love and it will wait for you here.</p>
-            <button class="btn-peach mt-6" @click="cartOpen = false">Continue shopping</button>
-          </div>
-
-          <div v-if="cart.length" class="border-t border-[#2A1B16]/10 bg-white/60 px-6 py-6">
-            <p class="flex items-center justify-between">
-              <span>Subtotal</span><strong class="text-xl">{{ formatKobo(cartSubtotal) }}</strong>
-            </p>
-            <p class="mt-1 text-xs text-[#5A413A]">Shipping and any fees are calculated at checkout.</p>
-            <button class="btn-dark mt-5 w-full justify-center" @click="beginCheckout">Checkout</button>
-            <button class="mt-3 w-full text-sm link-u" @click="cartOpen = false">Continue shopping</button>
-          </div>
-        </aside>
-      </div>
-    </transition>
-
-    <!-- WISHLIST DRAWER -->
-    <transition name="drawer">
-      <div v-if="wishOpen" class="backdrop justify-end" @click.self="wishOpen = false">
-        <aside class="flex h-full w-full max-w-md flex-col bg-[#FFF7F1] shadow-2xl" aria-label="Wishlist">
-          <div class="flex items-center justify-between border-b border-[#2A1B16]/10 px-6 py-5">
-            <h2 class="font-display text-3xl">Wishlist <span class="font-sans text-sm text-[#5A413A]">({{ wishlist.length }})</span></h2>
-            <button class="icon-btn" aria-label="Close wishlist" @click="wishOpen = false"><i class="fa-solid fa-xmark"></i></button>
-          </div>
-          <div v-if="wishedProducts.length" class="flex-1 overflow-y-auto px-6">
-            <article v-for="p in wishedProducts" :key="p.id" class="grid grid-cols-[72px_1fr_auto] items-center gap-4 border-b border-[#2A1B16]/10 py-4">
-              <img v-if="p.image" :src="p.image" :alt="p.name" class="h-24 w-[72px] rounded-2xl object-cover" />
-              <div v-else class="h-24 w-[72px] rounded-2xl bg-[#FFE6D6]"></div>
-              <div>
-                <h3 class="font-display text-lg leading-snug">{{ p.name }}</h3>
-                <p class="text-sm font-semibold">{{ formatKobo(p.price) }}</p>
-                <button class="link-u mt-2 text-sm" @click="wishOpen = false; openProduct(p)">View piece</button>
-              </div>
-              <button class="p-1 text-[#5A413A] hover:text-[#E2784A]" aria-label="Remove from wishlist" @click="toggleWish(p.id)">
-                <i class="fa-solid fa-xmark"></i>
-              </button>
-            </article>
-          </div>
-          <div v-else class="flex flex-1 flex-col items-center justify-center px-6 text-center">
-            <span class="flex h-16 w-16 items-center justify-center rounded-full bg-[#FFC4A3] text-2xl"><i class="fa-regular fa-heart"></i></span>
-            <h3 class="mt-5 font-display text-3xl">Nothing saved yet</h3>
-            <p class="mt-2 text-[#5A413A]">Tap the heart on any piece to save it for later.</p>
-            <button class="btn-peach mt-6" @click="wishOpen = false">Browse pieces</button>
-          </div>
-        </aside>
-      </div>
-    </transition>
-
-    <!-- PRODUCT MODAL -->
-    <transition name="swap">
-      <div v-if="selected" class="backdrop items-center justify-center p-4" @click.self="closeProduct">
-        <section class="relative grid max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-[2rem] bg-[#FFF7F1] shadow-2xl md:grid-cols-2"
-          role="dialog" aria-modal="true" :aria-label="selected.name">
-          <button class="icon-btn absolute right-3 top-3 z-10 bg-white/90" aria-label="Close" @click="closeProduct">
-            <i class="fa-solid fa-xmark"></i>
-          </button>
-
-          <div class="bg-[#FFE6D6] md:max-h-[92vh] md:overflow-y-auto">
-            <div class="aspect-[3/4] w-full">
+        <div v-else class="grid gap-10 md:grid-cols-2">
+          <!-- Images -->
+          <div>
+            <div class="aspect-square w-full overflow-hidden rounded-lg bg-[#FFE6D6]">
               <img v-if="selected.images[activeImage]" :src="selected.images[activeImage]" :alt="selected.name" class="h-full w-full object-cover" />
-              <div v-else class="flex h-full items-center justify-center text-[#C4623A]/50"><i class="fa-solid fa-image text-5xl"></i></div>
+              <div v-else class="flex h-full items-center justify-center text-[#C4623A]/50">
+                <i class="fa-solid fa-image text-5xl"></i>
+              </div>
             </div>
-            <div v-if="selected.images.length > 1" class="flex gap-2 overflow-x-auto p-3">
+            <div v-if="selected.images.length > 1" class="mt-4 flex gap-3 overflow-x-auto">
               <button v-for="(img, idx) in selected.images" :key="img + idx"
-                class="h-16 w-14 shrink-0 overflow-hidden rounded-xl border-2 transition"
+                class="h-16 w-16 shrink-0 overflow-hidden rounded-lg border-2 transition"
                 :class="idx === activeImage ? 'border-[#E2784A]' : 'border-transparent opacity-70'"
                 :aria-label="`Show image ${idx + 1}`" @click="activeImage = idx">
                 <img :src="img" alt="" class="h-full w-full object-cover" />
@@ -759,80 +504,150 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div class="overflow-y-auto p-7 md:max-h-[92vh] md:p-10">
-            <p v-if="selected.collectionName" class="text-sm text-[#5A413A]">{{ selected.collectionName }}</p>
-            <h2 class="mt-1 font-display text-4xl leading-tight">{{ selected.name }}</h2>
+          <!-- Details -->
+          <div>
+            <h1 class="text-2xl leading-snug md:text-[1.7rem]">{{ selected.name }}</h1>
             <p class="mt-3 flex items-baseline gap-3">
-              <span class="text-2xl font-semibold">{{ formatKobo(modalPrice) }}</span>
+              <span class="text-2xl font-semibold">{{ formatKobo(pagePrice) }}</span>
               <span v-if="onSale(selected)" class="text-sm text-[#5A413A] line-through">{{ formatKobo(selected.compareAt) }}</span>
             </p>
-            <p v-if="selected.short || selected.description" class="mt-4 leading-relaxed text-[#5A413A]">
-              {{ selected.description || selected.short }}
+
+            <div class="mt-6">
+              <p class="mb-2 text-sm">Quantity:</p>
+              <div class="box-stepper">
+                <button aria-label="Decrease quantity" @click="pickQty = Math.max(1, pickQty - 1)">−</button>
+                <span>{{ pickQty }}</span>
+                <button aria-label="Increase quantity" @click="pickQty = Math.min(pickQty + 1, maxPickQty)">+</button>
+              </div>
+            </div>
+
+            <div v-if="sizes.length" class="mt-5 max-w-md">
+              <p class="mb-2 text-sm">Size:</p>
+              <label class="select-box">
+                <select v-model="pickSize" aria-label="Size" @change="pageError = ''">
+                  <option v-for="s in sizes" :key="s" :value="s">{{ s }}</option>
+                </select>
+                <i class="fa-solid fa-chevron-down pointer-events-none text-xs"></i>
+              </label>
+            </div>
+
+            <div v-if="colours.length" class="mt-5 max-w-md">
+              <p class="mb-2 text-sm">Colour:</p>
+              <label class="select-box">
+                <select v-model="pickColour" aria-label="Colour" @change="pageError = ''">
+                  <option v-for="c in colours" :key="c" :value="c">{{ c }}</option>
+                </select>
+                <i class="fa-solid fa-chevron-down pointer-events-none text-xs"></i>
+              </label>
+            </div>
+
+            <p v-if="hasVariants(selected) && matchedVariant && !selected.backorder" class="mt-3 text-xs"
+              :class="pageStock <= 0 ? 'text-[#B63C34]' : pageStock <= 3 ? 'text-[#C4623A]' : 'text-[#5A413A]'">
+              {{ pageStock <= 0 ? 'Sold out' : pageStock <= 3 ? `Only ${pageStock} left` : 'In stock' }}
             </p>
 
-            <div v-if="sizes.length" class="mt-6">
-              <p class="mb-2 text-sm font-semibold">Size</p>
-              <div class="flex flex-wrap gap-2">
-                <button v-for="s in sizes" :key="s" class="opt" :class="{ on: pickSize === s }" :disabled="!sizeAvailable(s)"
-                  @click="pickSize = s; modalError = ''">{{ s }}</button>
-              </div>
+            <button class="btn-dark mt-6 w-full max-w-md justify-center" :disabled="pageSoldOut || !productInStock(selected)" @click="addFromPage">
+              {{ pageSoldOut || !productInStock(selected) ? 'SOLD OUT' : 'ADD TO CART' }}
+            </button>
+            <p v-if="pageError" class="mt-3 text-sm text-[#B63C34]">{{ pageError }}</p>
+
+            <div class="mt-8 space-y-4 text-sm leading-relaxed text-[#5A413A]">
+              <p v-if="selected.short">{{ selected.short }}</p>
+              <p v-if="selected.description" class="whitespace-pre-line">{{ selected.description }}</p>
+              <p v-if="selected.fabric"><strong class="text-[#2A1B16]">Fabric:</strong> {{ selected.fabric }}</p>
+              <p v-if="selected.care"><strong class="text-[#2A1B16]">Care:</strong> {{ selected.care }}</p>
             </div>
 
-            <div v-if="colours.length" class="mt-5">
-              <p class="mb-2 text-sm font-semibold">Colour</p>
-              <div class="flex flex-wrap gap-2">
-                <button v-for="c in colours" :key="c" class="opt" :class="{ on: pickColour === c }" :disabled="!colourAvailable(c)"
-                  @click="pickColour = c; modalError = ''">{{ c }}</button>
-              </div>
-            </div>
-
-            <p v-if="hasVariants(selected) && matchedVariant && !selected.backorder" class="mt-4 text-xs"
-              :class="modalStock <= 0 ? 'text-[#B63C34]' : modalStock <= 3 ? 'text-[#C4623A]' : 'text-[#5A413A]'">
-              {{ modalStock <= 0 ? 'Sold out' : modalStock <= 3 ? `Only ${modalStock} left` : 'In stock' }}
-            </p>
-
-            <div class="mt-6 flex items-center gap-4">
-              <div class="inline-flex items-center rounded-full border border-[#2A1B16]/20">
-                <button class="qty-btn" aria-label="Decrease quantity" @click="pickQty = Math.max(1, pickQty - 1)">−</button>
-                <span class="w-8 text-center">{{ pickQty }}</span>
-                <button class="qty-btn" aria-label="Increase quantity" @click="pickQty = Math.min(pickQty + 1, selected.backorder ? 99 : Math.max(modalStock, 1))">+</button>
-              </div>
-              <button class="btn-peach flex-1 justify-center" :disabled="modalSoldOut" @click="addFromModal">
-                {{ modalSoldOut ? 'Sold out' : 'Add to bag' }}
-              </button>
-            </div>
-            <p v-if="modalError" class="mt-3 text-sm text-[#B63C34]">{{ modalError }}</p>
-
-            <div v-if="selected.fabric || selected.care" class="mt-8 grid gap-4 border-t border-[#2A1B16]/10 pt-6 text-sm">
-              <div v-if="selected.fabric"><p class="font-semibold">Fabric</p><p class="mt-1 text-[#5A413A]">{{ selected.fabric }}</p></div>
-              <div v-if="selected.care"><p class="font-semibold">Care</p><p class="mt-1 text-[#5A413A]">{{ selected.care }}</p></div>
-            </div>
-
-            <div v-if="selected.customisable" class="mt-6 rounded-2xl bg-[#FFE6D6] p-4 text-sm">
+            <div v-if="selected.customisable" class="mt-6 max-w-md rounded-xl bg-[#FFE6D6] p-4 text-sm">
               Want a different fit? This piece can be made to your measurements.
-              <a :href="`${LANDING_URL}#custom`" class="link-u font-semibold">Request a custom version</a>
+              <a :href="`${LANDING_URL}#custom`" class="font-semibold underline">Request a custom version</a>
             </div>
+          </div>
+        </div>
+      </section>
 
-            <button class="mt-6 text-sm link-u" @click="toggleWish(selected.id)">
-              <i :class="isWished(selected.id) ? 'fa-solid fa-heart text-[#E2784A]' : 'fa-regular fa-heart'"></i>
-              {{ isWished(selected.id) ? 'Saved to wishlist' : 'Save to wishlist' }}
+      <footer class="border-t border-black/10 px-5 py-8 text-xs text-[#5A413A]">
+        <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
+          <p>© {{ new Date().getFullYear() }} AnniePetars. All rights reserved.</p>
+          <div class="flex gap-5">
+            <a :href="LANDING_URL" class="hover:text-[#2A1B16]">Main site</a>
+            <a :href="`${LANDING_URL}#contact`" class="hover:text-[#2A1B16]">Contact</a>
+            <a :href="WHATSAPP" target="_blank" rel="noopener" class="hover:text-[#2A1B16]">WhatsApp</a>
+          </div>
+        </div>
+      </footer>
+
+      <!-- TOAST -->
+      <transition name="drop">
+        <div v-if="toast" class="fixed bottom-6 left-1/2 z-[2500] flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded-full bg-[#2A1B16] px-5 py-3 text-sm text-[#FFF7F1] shadow-xl" role="status">
+          <i class="fa-solid fa-circle-check text-[#FFC4A3]"></i>{{ toast }}
+        </div>
+      </transition>
+    </v-main>
+
+    <!-- CART: Vuetify right drawer -->
+    <v-navigation-drawer v-model="cartOpen" location="right" temporary width="460" class="ap cart-drawer">
+      <div class="flex h-full flex-col">
+        <div class="flex items-center justify-between px-6 py-5 text-xs text-[#5A413A]">
+          <ol class="flex items-center gap-2">
+            <li class="font-semibold text-[#2A1B16]">Cart</li>
+            <li><i class="fa-solid fa-chevron-right text-[9px]"></i></li>
+            <li>Information</li>
+            <li><i class="fa-solid fa-chevron-right text-[9px]"></i></li>
+            <li>Shipping</li>
+          </ol>
+          <button class="p-1 text-lg text-[#2A1B16]" aria-label="Close cart" @click="cartOpen = false">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div v-if="cart.length" class="flex-1 overflow-y-auto px-6">
+          <article v-for="i in cart" :key="i.key" class="flex items-start justify-between gap-4 py-3 text-xs text-[#5A413A]">
+            <div class="min-w-0">
+              <p class="leading-snug">{{ i.name }}</p>
+              <p v-if="i.size || i.colour" class="mt-2">{{ [i.size, i.colour].filter(Boolean).join(', ') }}</p>
+              <p class="mt-2">{{ formatKobo(i.price) }}</p>
+              <button class="mt-2 text-[#B63C34] hover:underline" @click="removeItem(i.key)">Remove</button>
+            </div>
+            <div class="stepper mt-6 shrink-0">
+              <button aria-label="Decrease quantity" @click="changeQty(i.key, -1)">−</button>
+              <span>{{ i.qty }}</span>
+              <button aria-label="Increase quantity" @click="changeQty(i.key, 1)">+</button>
+            </div>
+          </article>
+
+          <div class="flex justify-end py-6">
+            <button class="flex items-center gap-1 text-xs font-semibold" @click="emptyCart">
+              <i class="fa-regular fa-trash-can"></i> Empty Cart
             </button>
           </div>
-        </section>
-      </div>
-    </transition>
+        </div>
 
-    <!-- TOAST -->
-    <transition name="drop">
-      <div v-if="toast" class="fixed bottom-6 left-1/2 z-[120] flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded-full bg-[#2A1B16] px-5 py-3 text-sm text-[#FFF7F1] shadow-xl" role="status">
-        <i class="fa-solid fa-circle-check text-[#FFC4A3]"></i>{{ toast }}
+        <div v-else class="flex flex-1 flex-col items-center justify-center px-6 text-center">
+          <span class="flex h-16 w-16 items-center justify-center rounded-full bg-[#FFC4A3] text-2xl">
+            <i class="fa-solid fa-cart-shopping"></i>
+          </span>
+          <h3 class="mt-5 font-display text-3xl">Your cart is empty</h3>
+          <p class="mt-2 text-sm text-[#5A413A]">Pick a piece you love and it will wait for you here.</p>
+          <button class="btn-dark mt-6" @click="cartOpen = false">Continue shopping</button>
+        </div>
+
+        <div v-if="cart.length" class="border-t border-black/10 px-6 py-6 text-xs">
+          <p class="flex justify-between py-2"><span>Items</span><span>{{ formatKobo(cartSubtotal) }}</span></p>
+          <p class="flex justify-between py-2"><span>Shipping</span><span>{{ formatKobo(shipping) }}</span></p>
+          <p class="flex justify-between py-2 font-semibold"><span>Total</span><span>{{ formatKobo(cartTotal) }}</span></p>
+          <button class="btn-dark mt-4 w-full justify-center" @click="beginCheckout">CONTINUE</button>
+        </div>
       </div>
-    </transition>
-  </div>
+    </v-navigation-drawer>
+  </v-layout>
 </template>
 
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,300;1,9..144,400&family=Manrope:wght@400;500;600&display=swap');
+
+/* Vuetify's layout wrapper must not clip or flex the page */
+.ap-layout.v-layout { display: block; overflow: visible; min-height: 100vh; }
 
 .ap { font-family: 'Manrope', system-ui, sans-serif; }
 .ap .font-display { font-family: 'Fraunces', Georgia, serif; font-weight: 300; }
@@ -840,90 +655,65 @@ onBeforeUnmount(() => {
 .ap button { cursor: pointer; }
 .ap button:disabled { cursor: not-allowed; }
 
-/* Buttons (same as landing page) */
-.ap .btn-peach, .ap .btn-ghost, .ap .btn-dark {
-  display: inline-flex; align-items: center; border-radius: 999px; padding: .85rem 1.6rem;
-  font-weight: 600; font-size: .9rem; transition: transform .3s, background .3s, box-shadow .3s, color .3s;
+/* Buttons */
+.ap .btn-dark, .ap .btn-ghost {
+  display: inline-flex; align-items: center; border-radius: 8px; padding: .95rem 1.6rem;
+  font-weight: 600; font-size: .85rem; letter-spacing: .03em; transition: background .25s, color .25s, transform .25s;
 }
-.ap .btn-peach { background: #f59a6c; color: #2a1b16; box-shadow: 0 10px 30px -10px rgba(226,120,74,.7); }
-.ap .btn-peach:hover { background: #ffc4a3; transform: translateY(-3px); }
-.ap .btn-peach:disabled { opacity: .6; pointer-events: none; }
+.ap .btn-dark { background: #2a1b16; color: #fff7f1; box-shadow: 0 6px 16px -8px rgba(42,27,22,.6); }
+.ap .btn-dark:hover:not(:disabled) { background: #e2784a; }
+.ap .btn-dark:disabled { opacity: .55; pointer-events: none; }
 .ap .btn-ghost { border: 1.5px solid #2a1b16; }
-.ap .btn-ghost:hover { background: #2a1b16; color: #fff7f1; transform: translateY(-3px); }
+.ap .btn-ghost:hover:not(:disabled) { background: #2a1b16; color: #fff7f1; }
 .ap .btn-ghost:disabled { opacity: .6; pointer-events: none; }
-.ap .btn-dark { background: #2a1b16; color: #fff7f1; }
-.ap .btn-dark:hover { background: #e2784a; }
 
-.ap .link-u { position: relative; }
-.ap .link-u::after {
-  content: ''; position: absolute; left: 0; bottom: -4px; height: 1.5px; width: 100%;
-  background: currentColor; transform: scaleX(0); transform-origin: right; transition: transform .35s;
+/* Search + filter (grey pills like the reference) */
+.ap .search, .ap .filter {
+  display: flex; align-items: center; gap: .6rem; background: #f1f1f1; border-radius: 6px; padding: .7rem .9rem;
 }
-.ap .link-u:hover::after { transform: scaleX(1); transform-origin: left; }
+.ap .search { width: min(100%, 22rem); }
+.ap .search input { background: transparent; outline: none; width: 100%; font-size: .8rem; }
+.ap .filter { position: relative; font-size: .8rem; font-weight: 600; }
+.ap .filter select { appearance: none; background: transparent; outline: none; padding-right: 1.4rem; font-weight: 600; }
+.ap .filter i { position: absolute; right: .9rem; }
 
-.ap .field {
-  width: 100%; border-radius: 1rem; padding: .85rem 1rem; background: #fff7f1;
-  border: 1.5px solid transparent; transition: box-shadow .25s, border-color .25s;
+/* Steppers */
+.ap .stepper { display: inline-flex; align-items: center; gap: .5rem; font-size: .8rem; }
+.ap .stepper button {
+  width: 24px; height: 24px; border-radius: 999px; background: #ececec; font-size: .9rem; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center; transition: background .2s;
 }
-.ap .field:focus { border-color: #f59a6c; box-shadow: 0 0 0 4px rgba(245,154,108,.25); outline: none; }
+.ap .stepper button:hover:not(:disabled) { background: #ffc4a3; }
+.ap .stepper button:disabled { opacity: .5; }
+.ap .stepper span { min-width: 1rem; text-align: center; }
+.ap .stepper.disabled { opacity: .5; }
 
-.ap .seg { display: inline-flex; background: #ffe6d6; border-radius: 999px; padding: 4px; }
-.ap .seg button { padding: .45rem 1rem; border-radius: 999px; font-size: .8rem; transition: all .3s; }
-.ap .seg button.on { background: #f59a6c; font-weight: 600; }
+.ap .box-stepper { display: inline-flex; align-items: stretch; border: 1px solid #e3e3e3; }
+.ap .box-stepper button { width: 46px; background: #f1f1f1; font-size: 1.1rem; }
+.ap .box-stepper button:hover { background: #ffe6d6; }
+.ap .box-stepper span { min-width: 54px; display: flex; align-items: center; justify-content: center; }
+.ap .box-stepper { height: 40px; }
 
-/* Shop-specific */
-.ap .icon-btn {
-  display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 42px;
-  border-radius: 999px; transition: background .25s, transform .25s;
+.ap .select-box {
+  position: relative; display: flex; align-items: center; border: 1px solid #e3e3e3; border-radius: 4px; background: #fff;
 }
-.ap .icon-btn:hover { background: #ffe6d6; transform: translateY(-1px); }
+.ap .select-box select { appearance: none; width: 100%; background: transparent; padding: 1rem 2.4rem 1rem 1rem; font-size: .85rem; outline: none; }
+.ap .select-box i { position: absolute; right: 1rem; }
+
+.ap .badge { border-radius: 999px; padding: .2rem .6rem; font-size: 11px; font-weight: 600; }
 .ap .count-dot {
-  position: absolute; top: 2px; right: 0; min-width: 18px; height: 18px; padding: 0 5px;
-  border-radius: 999px; background: #e2784a; color: #fff; font-size: 10px; font-weight: 600;
-  display: flex; align-items: center; justify-content: center;
+  position: absolute; top: -8px; right: -10px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: #e2784a; color: #fff; font-size: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center;
 }
-.ap .chip {
-  display: inline-flex; align-items: center; gap: .55rem; white-space: nowrap; border-radius: 999px;
-  padding: .4rem 1rem .4rem .4rem; font-size: .85rem; border: 1.5px solid rgba(42,27,22,.15);
-  background: #fff7f1; transition: all .3s;
-}
-.ap .chip:first-child { padding-left: 1rem; }
-.ap .chip:hover { border-color: #2a1b16; }
-.ap .chip.on { background: #f59a6c; border-color: #f59a6c; font-weight: 600; }
-.ap .badge { border-radius: 999px; padding: .25rem .65rem; font-size: 11px; font-weight: 600; }
-.ap .qty-btn { width: 36px; height: 36px; font-size: 1.1rem; border-radius: 999px; }
-.ap .qty-btn:hover { background: #ffe6d6; }
-.ap .opt {
-  min-width: 44px; padding: .55rem 1rem; border-radius: 999px; border: 1.5px solid rgba(42,27,22,.2);
-  font-size: .85rem; transition: all .25s;
-}
-.ap .opt:hover:not(:disabled) { border-color: #2a1b16; }
-.ap .opt.on { background: #2a1b16; color: #fff7f1; border-color: #2a1b16; }
-.ap .opt:disabled { opacity: .35; text-decoration: line-through; }
-.ap .backdrop {
-  position: fixed; inset: 0; z-index: 100; display: flex; background: rgba(42,27,22,.55); backdrop-filter: blur(4px);
-}
-.ap .no-scrollbar { scrollbar-width: none; }
-.ap .no-scrollbar::-webkit-scrollbar { display: none; }
 .ap .skeleton { animation: apPulse2 1.4s ease-in-out infinite; }
 @keyframes apPulse2 { 50% { opacity: .55; } }
+.ap .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
-.ap .blob { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .7; animation: apDrift 14s ease-in-out infinite alternate; pointer-events: none; }
-.ap .blob-a { width: 28rem; height: 28rem; background: #ffc4a3; top: -8rem; right: -8rem; }
-.ap .blob-b { width: 20rem; height: 20rem; background: #ffe0cc; bottom: -4rem; left: -6rem; animation-delay: -6s; }
-@keyframes apDrift { to { transform: translate(40px, 30px) scale(1.15); } }
-.ap .pop { animation: apPop .6s cubic-bezier(.3,1.6,.5,1); }
-@keyframes apPop { from { transform: scale(0); } }
+/* Cart drawer (Vuetify) */
+.cart-drawer.v-navigation-drawer { background: #fff; max-width: 100vw; }
 
-/* Vue transitions */
 .drop-enter-active, .drop-leave-active { transition: all .35s; }
-.drop-enter-from, .drop-leave-to { opacity: 0; transform: translateY(-10px); }
-.swap-enter-active, .swap-leave-active { transition: all .35s; }
-.swap-enter-from, .swap-leave-to { opacity: 0; transform: translateY(16px); }
-.drawer-enter-active, .drawer-leave-active { transition: opacity .3s; }
-.drawer-enter-active aside, .drawer-leave-active aside { transition: transform .35s cubic-bezier(.2,.8,.2,1); }
-.drawer-enter-from, .drawer-leave-to { opacity: 0; }
-.drawer-enter-from aside, .drawer-leave-to aside { transform: translateX(100%); }
+.drop-enter-from, .drop-leave-to { opacity: 0; transform: translate(-50%, 10px); }
 
 @media (prefers-reduced-motion: reduce) {
   .ap *, .ap *::before, .ap *::after {
