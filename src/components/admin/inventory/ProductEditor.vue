@@ -110,29 +110,29 @@ async function remove() {
         <div v-if="loading" class="py-16 text-center text-gray-500">Loading…</div>
 
         <div v-else-if="tab === 'details'" class="grid gap-4 md:grid-cols-2">
-          <v-text-field v-model="form.name" label="Name *" class="md:col-span-2" hide-details="auto" />
-          <v-text-field v-model="form.slug" label="Slug (auto from name if empty)" hide-details />
-          <v-text-field v-model="form.sku" label="SKU" hide-details />
-          <v-select v-model="form.collection_id" label="Collection" clearable hide-details
+          <v-text-field variant="outlined" color="primary" v-model="form.name" label="Name *" class="md:col-span-2" hide-details="auto" />
+          <v-text-field variant="outlined" color="primary" v-model="form.slug" label="Slug (auto from name if empty)" hide-details />
+          <v-text-field variant="outlined" color="primary" v-model="form.sku" label="SKU" hide-details />
+          <v-select variant="outlined" color="primary"v-model="form.collection_id" label="Collection" clearable hide-details
             :items="collections.map((c) => ({ title: c.name, value: c.id }))" />
-          <v-combobox v-model="form.product_type" label="Product type" hide-details
+          <v-combobox variant="outlined" color="primary" v-model="form.product_type" label="Product type" hide-details
             :items="['ready_to_wear','occasion_wear','bridal','aso_ebi','made_to_measure','girl_child']" />
-          <v-text-field v-model.number="form.price" label="Price (₦)" type="number" min="0" hide-details />
-          <v-text-field v-model.number="form.compare_at_price" label="Compare-at price (₦, optional)" type="number" min="0" hide-details />
-          <v-select v-model="form.status" label="Status" hide-details
+          <v-text-field variant="outlined" color="primary" v-model.number="form.price" label="Price (₦)" type="number" min="0" hide-details />
+          <v-text-field variant="outlined" color="primary" v-model.number="form.compare_at_price" label="Compare-at price (₦, optional)" type="number" min="0" hide-details />
+          <v-select variant="outlined" color="primary" v-model="form.status" label="Status" hide-details
             :items="[{title:'Draft',value:'draft'},{title:'Active (visible in shop)',value:'active'},{title:'Archived',value:'archived'}]" />
-          <v-text-field v-model="form.fabric" label="Fabric" hide-details />
-          <v-textarea v-model="form.short_description" label="Short description" rows="2" auto-grow class="md:col-span-2" hide-details />
-          <v-textarea v-model="form.description" label="Description" rows="4" auto-grow class="md:col-span-2" hide-details />
-          <v-textarea v-model="form.care_instructions" label="Care instructions" rows="2" auto-grow class="md:col-span-2" hide-details />
+          <v-text-field variant="outlined" color="primary" v-model="form.fabric" label="Fabric" hide-details />
+          <v-textarea variant="outlined" color="primary" v-model="form.short_description" label="Short description" rows="2" auto-grow class="md:col-span-2" hide-details />
+          <v-textarea variant="outlined" color="primary" v-model="form.description" label="Description" rows="4" auto-grow class="md:col-span-2" hide-details />
+          <v-textarea variant="outlined" color="primary" v-model="form.care_instructions" label="Care instructions" rows="2" auto-grow class="md:col-span-2" hide-details />
           <div class="flex flex-wrap gap-x-6 md:col-span-2">
             <v-switch v-model="form.is_featured" label="Featured" color="primary" hide-details density="compact" />
             <v-switch v-model="form.is_new_arrival" label="New arrival" color="primary" hide-details density="compact" />
             <v-switch v-model="form.is_customisable" label="Customisable" color="primary" hide-details density="compact" />
             <v-switch v-model="form.allow_backorder" label="Allow backorder" color="primary" hide-details density="compact" />
           </div>
-          <v-text-field v-model="form.seo_title" label="SEO title" hide-details />
-          <v-text-field v-model="form.seo_description" label="SEO description" hide-details />
+          <v-text-field variant="outlined" color="primary" v-model="form.seo_title" label="SEO title" hide-details />
+          <v-text-field variant="outlined" color="primary" v-model="form.seo_description" label="SEO description" hide-details />
         </div>
 
         <ImageManager v-else-if="tab === 'images'" v-model="images" />
@@ -143,7 +143,7 @@ async function remove() {
         <v-btn v-if="productId" color="error" variant="text" @click="remove">Delete</v-btn>
         <v-spacer />
         <v-btn variant="text" @click="close">Cancel</v-btn>
-        <v-btn color="primary" :loading="saving" @click="save">Save product</v-btn>
+        <v-btn color="#FFC4A3" variant="flat" :loading="saving" @click="save">Save product</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

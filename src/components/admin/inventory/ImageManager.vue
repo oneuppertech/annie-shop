@@ -40,7 +40,7 @@ function remove(i) {
 <template>
   <div>
     <input ref="input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden @change="onFiles" />
-    <v-btn :loading="uploading" prepend-icon="mdi-upload" @click="input.click()">Upload images</v-btn>
+    <v-btn :loading="uploading" color="#FFC4A3" prepend-icon="mdi-upload" @click="input.click()">Upload images</v-btn>
     <span class="ml-3 text-xs text-gray-500">JPG, PNG, WEBP or GIF, max 5MB each. The primary image is shown first.</span>
 
     <p v-if="!images.length" class="py-12 text-center text-gray-500">No images yet</p>

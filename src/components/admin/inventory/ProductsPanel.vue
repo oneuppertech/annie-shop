@@ -131,3 +131,8 @@ const statusColor = { active: 'success', draft: 'warning', archived: 'grey' }
       @saved="() => { load(); emit('changed') }" />
   </div>
 </template>
+
+<style scoped>
+.filters :deep(.v-field--variant-outlined .v-field__outline) { color: #FFC4A3; }
+.filters :deep(.v-field--variant-outlined.v-field--focused .v-field__outline) { color: #E2784A; }
+</style>
