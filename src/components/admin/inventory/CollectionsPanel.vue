@@ -103,21 +103,21 @@ async function onFile(e) {
     </div>
 
     <v-dialog v-model="dialog" max-width="640" scrollable>
-      <v-card :title="form.id ? 'Edit collection' : 'New collection'">
-        <v-card-text class="grid gap-4">
-          <v-text-field v-model="form.name" label="Name *" hide-details />
-          <v-text-field v-model="form.slug" label="Slug (auto from name if empty)" hide-details />
-          <v-text-field v-model="form.tagline" label="Tagline" hide-details />
-          <v-textarea v-model="form.description" label="Description" rows="3" auto-grow hide-details />
+      <v-card class="pa-4" :title="form.id ? 'Edit collection' : 'New collection'">
+        <v-card-text class="grid gap-4 mt-2">
+          <v-text-field variant="outlined" class="mt-4" color="primary" v-model="form.name" label="Name *" hide-details />
+          <v-text-field variant="outlined" color="primary" v-model="form.slug" label="Slug (auto from name if empty)" hide-details />
+          <v-text-field variant="outlined" color="primary" v-model="form.tagline" label="Tagline" hide-details />
+          <v-textarea variant="outlined" color="primary" v-model="form.description" label="Description" rows="3" auto-grow hide-details />
           <div class="flex items-center gap-3">
             <img v-if="form.image_url" :src="form.image_url" class="h-16 w-16 rounded object-cover" alt="" />
             <input ref="fileInput" type="file" accept="image/*" hidden @change="onFile" />
             <v-btn :loading="uploading" size="small" @click="fileInput.click()">Upload image</v-btn>
-            <v-text-field v-model="form.image_url" label="or image URL / path" density="compact" hide-details />
+            <v-text-field variant="outlined" color="primary" v-model="form.image_url" label="or image URL / path" density="compact" hide-details />
           </div>
           <v-switch v-model="form.is_active" label="Visible in shop" color="primary" hide-details density="compact" />
-          <v-text-field v-model="form.seo_title" label="SEO title" hide-details />
-          <v-text-field v-model="form.seo_description" label="SEO description" hide-details />
+          <v-text-field variant="outlined" color="primary" v-model="form.seo_title" label="SEO title" hide-details />
+          <v-text-field variant="outlined" color="primary" v-model="form.seo_description" label="SEO description" hide-details />
         </v-card-text>
         <v-card-actions>
           <v-spacer />
