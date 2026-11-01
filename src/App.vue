@@ -1,5 +1,12 @@
 <script setup lang="ts">
 import { RouterView } from 'vue-router'
+const defaults = {
+  VTextField: { variant: 'outlined', color: 'primary', baseColor: '#FFC4A3', density: 'comfortable' },
+  VTextarea: { variant: 'outlined', color: 'primary', baseColor: '#FFC4A3' },
+  VSelect: { variant: 'outlined', color: 'primary', baseColor: '#FFC4A3', density: 'comfortable' },
+  VCombobox: { variant: 'outlined', color: 'primary', baseColor: '#FFC4A3', density: 'comfortable' },
+  VAutocomplete: { variant: 'outlined', color: 'primary', baseColor: '#FFC4A3', density: 'comfortable' }
+}
 
 import WhatsAppButton from '@/components/WhatsappButton.vue'
 </script>

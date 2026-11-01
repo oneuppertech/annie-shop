@@ -10,7 +10,17 @@ const router = createRouter({
       name: 'home',
       component: LandingPage
     },
-    { path: '/admin/inventory', component: () => import('@/views/admin/InventoryView.vue') }
+    {
+      path: '/admin/login',
+      name: 'admin-login',
+      component: () => import('@/views/admin/LoginView.vue'),
+      meta: { guestOnly: true }
+    },
+    {
+      path: '/admin/inventory',
+      component: () => import('@/views/admin/InventoryView.vue'),
+      meta: { requiresAdmin: true }
+    }
   ],
   scrollBehavior(to, from, savedPosition) {
     if (savedPosition) {
@@ -26,3 +36,12 @@ const router = createRouter({
 })
 
 export default router
+import { useAuthStore } from '@/stores/auth'
+
+router.beforeEach(async (to) => {
+  const auth = useAuthStore()
+  await auth.init()
+  if (to.meta.requiresAdmin && !auth.isAdmin)
+    return { name: 'admin-login', query: { redirect: to.fullPath } }
+  if (to.meta.guestOnly && auth.isAdmin) return '/admin/inventory'
+})
