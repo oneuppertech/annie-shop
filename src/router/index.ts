@@ -1,7 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LandingPage from '../views/LandingPage.vue'
 
-
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
 
@@ -11,7 +10,7 @@ const router = createRouter({
       name: 'home',
       component: LandingPage
     },
-    
+    { path: '/admin/inventory', component: () => import('@/views/admin/InventoryView.vue') }
   ],
   scrollBehavior(to, from, savedPosition) {
     if (savedPosition) {

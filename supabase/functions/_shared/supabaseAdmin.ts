@@ -10,11 +10,11 @@ export async function getAuthenticatedUser(req:Request) {
  const {data,error}=await getAdminClient().auth.getUser(token)
  return error ? null : data.user
 }
-export async function requireRole(req:Request,roles:string[]) {
- const user=await getAuthenticatedUser(req)
- if(!user) throw Object.assign(new Error('Authentication required'),{status:401})
- const db=getAdminClient()
- const {data,error}=await db.from('user_roles').select('role').eq('user_id',user.id).maybeSingle()
- if(error || !data || !roles.includes(data.role)) throw Object.assign(new Error('Insufficient permissions'),{status:403})
- return {user,db,role:data.role}
+export async function requireRole(req: Request, roles: string[]) {
+  const user = await getAuthenticatedUser(req)
+  if (!user) throw new HttpError(401, 'Authentication required')
+  const db = getAdminClient()
+  const { data, error } = await db.from('user_roles').select('role').eq('user_id', user.id).maybeSingle()
+  if (error || !data || !roles.includes(data.role)) throw new HttpError(403, 'Insufficient permissions')
+  return { user, db, role: data.role as string }
 }
