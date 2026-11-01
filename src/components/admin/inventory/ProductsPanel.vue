@@ -81,7 +81,7 @@ const statusColor = { active: 'success', draft: 'warning', archived: 'grey' }
           <v-list-item title="Archive" @click="bulk('archived')" />
         </v-list>
       </v-menu>
-      <v-btn color="primary" @click="openEditor()">New product</v-btn>
+      <v-btn color="#FFC4A3" @click="openEditor()">New product</v-btn>
     </div>
 
     <div class="overflow-x-auto rounded-lg border">
