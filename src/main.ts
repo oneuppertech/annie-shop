@@ -11,8 +11,8 @@ import 'aos/dist/aos.css'
 import AOS from 'aos'
 
 // Import Element Plus and its styles
-import ElementPlus from 'element-plus';
-import 'element-plus/dist/index.css';
+import ElementPlus from 'element-plus'
+import 'element-plus/dist/index.css'
 
 import 'vuetify/styles'
 import './assets/fonts.css'
@@ -23,6 +23,7 @@ import { aliases, mdi } from 'vuetify/iconsets/mdi'
 import VueApexCharts from 'vue3-apexcharts'
 import '@fortawesome/fontawesome-free/css/all.css'
 import '@mdi/font/css/materialdesignicons.css'
+import { initializeSupabaseAuth } from '@/services/supabase'
 
 let vuetify = createVuetify({
   components,
@@ -38,15 +39,14 @@ let vuetify = createVuetify({
 
 const app = createApp(App)
 
-
-
+await initializeSupabaseAuth()
 const pinia = createPinia()
 pinia.use(piniaPluginPersistedstate)
 app.use(pinia)
 app.use(router)
 app.use(vuetify)
 app.use(VueApexCharts)
-app.use(ElementPlus);
+app.use(ElementPlus)
 
 const urlParams = new URLSearchParams(window.location.search)
 const redirectPath = urlParams.get('redirect')
@@ -58,7 +58,3 @@ if (redirectPath) {
 app.mount('#app')
 
 AOS.init()
-
-
-
-

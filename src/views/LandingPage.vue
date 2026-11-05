@@ -72,32 +72,43 @@ function normalizeImages(row) {
   const mapped = list
     .map((i) =>
       typeof i === 'string'
-        ? { url: i, primary: false, order: 0 }
-        : { url: text(i, 'image_url', 'url'), primary: !!i.is_primary, order: Number(i.sort_order || 0) }
+        ? { url: i, type: 'image', primary: false, order: 0 }
+        : {
+            url: text(i, 'image_url', 'url'),
+            type: i.media_type === 'video' ? 'video' : 'image',
+            primary: !!i.is_primary,
+            order: Number(i.sort_order || 0)
+          }
     )
     .filter((i) => i.url)
     .sort((a, b) => Number(b.primary) - Number(a.primary) || a.order - b.order)
-    .map((i) => i.url)
+    .map(({ url, type }) => ({ url, type }))
   const single = text(row, 'image_url', 'image', 'primary_image')
-  if (!mapped.length && single) mapped.push(single)
+  if (!mapped.length && single) mapped.push({ url: single, type: 'image' })
   return mapped
 }
 
 function normalizeProduct(row, index) {
   const variantsRaw = row.variants || row.product_variants || []
+
   const variants = (Array.isArray(variantsRaw) ? variantsRaw : [])
-    .filter((v) => v.is_active !== false)
-    .map((v) => ({
+    .filter(v => v.is_active !== false)
+    .map(v => ({
       id: v.id,
       size: v.size || '',
       colour: v.colour || v.color || '',
       price: num(v, 'price_kobo'),
       stock: num(v, 'stock_quantity') ?? 0
     }))
-  const col = row.collection && typeof row.collection === 'object' ? row.collection : {}
+
+  const col = row.collection && typeof row.collection === 'object'
+    ? row.collection
+    : {}
+
   const colName = text(col, 'name') || text(row, 'collection_name')
   const images = normalizeImages(row)
   const name = text(row, 'name', 'title') || 'AnniePetars piece'
+
   return {
     id: row.id || `p-${index}`,
     name,
@@ -108,8 +119,11 @@ function normalizeProduct(row, index) {
     care: text(row, 'care_instructions'),
     price: num(row, 'price_kobo') ?? Math.round((num(row, 'price') || 0) * 100),
     compareAt: num(row, 'compare_at_price_kobo'),
+
+    // Correct image mapping
     images,
-    image: images[0] || '',
+    image: images[0]?.url || '',
+
     collectionName: colName,
     collectionSlug: text(col, 'slug') || text(row, 'collection_slug') || slugify(colName),
     isNew: !!row.is_new_arrival,
@@ -145,6 +159,7 @@ async function loadCatalog({ append = false } = {}) {
   loadError.value = false
   try {
     const res = await ApiService.get(`/catalog-public?${buildQuery(append ? offset.value : 0)}`)
+    console.log("catalog:", res)
     if (id !== requestId) return
     const root = Array.isArray(res) ? { products: res } : res?.data || res || {}
     if (Array.isArray(root.collections) && root.collections.length) {
@@ -325,6 +340,12 @@ function beginCheckout() {
   showToast('Checkout is not connected yet')
 }
 
+const track = ref(null)
+const onScroll = () => { const t = track.value; if (t) activeImage.value = Math.round(t.scrollLeft / t.clientWidth) }
+const goTo = (i) => track.value?.scrollTo({ left: i * track.value.clientWidth, behavior: 'smooth' })
+const slide = (d) => goTo(Math.min(Math.max(activeImage.value + d, 0), selected.value.images.length - 1))
+const pageOnSale = computed(() => !!selected.value?.compareAt && selected.value.compareAt > pagePrice.value)
+
 /* ---------- UI plumbing ---------- */
 function showToast(msg) {
   toast.value = msg
@@ -443,10 +464,10 @@ onBeforeUnmount(() => {
             </a>
 
             <div class="mt-2 flex items-center justify-between gap-2">
-              <p class="text-xs font-semibold">
-                {{ formatKobo(p.price) }}
-                <span v-if="onSale(p)" class="ml-1 font-normal text-[#5A413A] line-through">{{ formatKobo(p.compareAt) }}</span>
-              </p>
+             <p class="text-xs font-semibold">
+  <span v-if="onSale(p)" class="mr-1 font-normal text-[#5A413A] line-through">{{ formatKobo(p.compareAt) }}</span>
+  {{ formatKobo(p.price) }}
+</p>
               <div class="stepper" :class="{ disabled: !productInStock(p) }">
                 <button aria-label="Remove one" :disabled="!qtyInCart(p)" @click="cardMinus(p)">−</button>
                 <span>{{ qtyInCart(p) }}</span>
@@ -487,30 +508,39 @@ onBeforeUnmount(() => {
 
         <div v-else class="grid gap-10 md:grid-cols-2">
           <!-- Images -->
-          <div>
-            <div class="aspect-square w-full overflow-hidden rounded-lg bg-[#FFE6D6]">
-              <img v-if="selected.images[activeImage]" :src="selected.images[activeImage]" :alt="selected.name" class="h-full w-full object-cover" />
-              <div v-else class="flex h-full items-center justify-center text-[#C4623A]/50">
-                <i class="fa-solid fa-image text-5xl"></i>
-              </div>
-            </div>
-            <div v-if="selected.images.length > 1" class="mt-4 flex gap-3 overflow-x-auto">
-              <button v-for="(img, idx) in selected.images" :key="img + idx"
-                class="h-16 w-16 shrink-0 overflow-hidden rounded-lg border-2 transition"
-                :class="idx === activeImage ? 'border-[#E2784A]' : 'border-transparent opacity-70'"
-                :aria-label="`Show image ${idx + 1}`" @click="activeImage = idx">
-                <img :src="img" alt="" class="h-full w-full object-cover" />
-              </button>
-            </div>
-          </div>
+        <div>
+  <div class="relative">
+    <div ref="track" class="flex aspect-square w-full snap-x snap-mandatory overflow-x-auto rounded-lg bg-[#FFE6D6] [scrollbar-width:none]" @scroll.passive="onScroll">
+      <div v-for="(m, idx) in selected.images" :key="m.url + idx" class="h-full w-full shrink-0 snap-center">
+        <video v-if="m.type === 'video'" :src="m.url" class="h-full w-full object-cover" controls playsinline preload="metadata" />
+        <img v-else :src="m.url" :alt="selected.name" class="h-full w-full object-cover" />
+      </div>
+      <div v-if="!selected.images.length" class="flex h-full w-full items-center justify-center text-[#C4623A]/50">
+        <i class="fa-solid fa-image text-5xl"></i>
+      </div>
+    </div>
+    <template v-if="selected.images.length > 1">
+      <button class="nav left-2" aria-label="Previous" :disabled="activeImage === 0" @click="slide(-1)"><i class="fa-solid fa-chevron-left text-xs"></i></button>
+      <button class="nav right-2" aria-label="Next" :disabled="activeImage === selected.images.length - 1" @click="slide(1)"><i class="fa-solid fa-chevron-right text-xs"></i></button>
+    </template>
+  </div>
+  <div v-if="selected.images.length > 1" class="mt-4 flex gap-3 overflow-x-auto">
+    <button v-for="(m, idx) in selected.images" :key="m.url + idx"
+      class="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border-2 bg-[#FFE6D6] transition"
+      :class="idx === activeImage ? 'border-[#E2784A]' : 'border-transparent opacity-70'" @click="goTo(idx)">
+      <img v-if="m.type === 'image'" :src="m.url" alt="" class="h-full w-full object-cover" />
+      <i v-else class="fa-solid fa-play text-[#2A1B16]"></i>
+    </button>
+  </div>
+</div>
 
           <!-- Details -->
           <div>
             <h1 class="text-2xl leading-snug md:text-[1.7rem]">{{ selected.name }}</h1>
-            <p class="mt-3 flex items-baseline gap-3">
-              <span class="text-2xl font-semibold">{{ formatKobo(pagePrice) }}</span>
-              <span v-if="onSale(selected)" class="text-sm text-[#5A413A] line-through">{{ formatKobo(selected.compareAt) }}</span>
-            </p>
+           <p class="mt-3 flex items-baseline gap-3">
+  <span v-if="pageOnSale" class="text-sm text-[#5A413A] line-through">{{ formatKobo(selected.compareAt) }}</span>
+  <span class="text-2xl font-semibold">{{ formatKobo(pagePrice) }}</span>
+</p>
 
             <div class="mt-6">
               <p class="mb-2 text-sm">Quantity:</p>
@@ -720,4 +750,6 @@ onBeforeUnmount(() => {
     animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important;
   }
 }
+.ap .nav { position: absolute; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; border-radius: 999px; background: rgba(255,255,255,.9); display: flex; align-items: center; justify-content: center; }
+.ap .nav:disabled { opacity: .4; }
 </style>
