@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import ApiService from '@/services/api'
+import { createCheckout, verifyPayment } from '@/services/checkout'
 
 /* ---------- Config ---------- */
 const LANDING_URL = 'https://anniepetars.com'
@@ -36,6 +37,12 @@ const toast = ref('')
 let toastTimer
 let searchTimer
 let requestId = 0
+
+const step = ref('cart') // 'cart' | 'info'
+const form = ref({ name: '', email: '', phone: '', address: '', city: '', state: '', note: '' })
+const formError = ref('')
+const paying = ref(false)
+const payResult = ref(null) // { state: 'checking'|'paid'|'failed'|'unconfirmed', reference }
 
 /* ---------- Helpers ---------- */
 const formatKobo = (kobo) =>
@@ -339,12 +346,81 @@ function cardMinus(p) {
 }
 
 function beginCheckout() {
-  // TODO: POST cart (variant ids + quantities only, never prices) to a create-order edge function.
-  // The server should re-price from the database, create the order + payment session,
-  // and return a payment URL to redirect to.
-  showToast('Checkout is not connected yet')
+  formError.value = ''
+  step.value = 'info'
 }
 
+async function submitCheckout() {
+  const f = form.value
+  const okEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())
+  if (
+    !f.name.trim() ||
+    !okEmail ||
+    f.phone.replace(/\D/g, '').length < 10 ||
+    !f.address.trim() ||
+    !f.city.trim()
+  ) {
+    formError.value = 'Please fill in your name, email, phone, address and city.'
+    return
+  }
+  paying.value = true
+  formError.value = ''
+  try {
+    const res = await createCheckout({
+      name: f.name.trim(),
+      email: f.email.trim(),
+      phone: f.phone.trim(),
+      note: f.note.trim(),
+      // ids and quantities only; the server prices everything
+      items: cart.value.map((i) => ({
+        productId: i.productId,
+        variantId: i.variantId,
+        qty: i.qty
+      })),
+      shippingAddress: {
+        line1: f.address.trim(),
+        city: f.city.trim(),
+        state: f.state.trim(),
+        country: 'NG',
+        phone: f.phone.trim()
+      }
+    })
+    if (!res?.authorizationUrl) throw new Error('No payment link returned')
+    window.location.href = res.authorizationUrl
+  } catch (e) {
+    formError.value =
+      e?.response?.data?.error || e?.message || 'Could not start payment. Please try again.'
+    paying.value = false
+  }
+}
+
+/* Runs when Paystack sends the customer back to ?reference=AP-XXXX */
+async function checkReturn() {
+  const q = new URLSearchParams(location.search)
+  const ref = q.get('reference') || q.get('trxref')
+  if (!ref) return
+  history.replaceState(null, '', location.pathname + location.hash)
+  payResult.value = { state: 'checking', reference: ref }
+  try {
+    const d = await verifyPayment(ref)
+    if (d?.paid) {
+      emptyCart()
+      payResult.value = { state: 'paid', reference: ref }
+    } else {
+      payResult.value = { state: 'failed', reference: ref }
+    }
+  } catch {
+    // verify failed (network or amount mismatch); the webhook may still settle it
+    payResult.value = { state: 'unconfirmed', reference: ref }
+  }
+}
+
+watch(cartOpen, (open) => {
+  if (!open) step.value = 'cart'
+})
+watch(cartCount, (n) => {
+  if (!n) step.value = 'cart'
+})
 const track = ref(null)
 const onScroll = () => {
   const t = track.value
@@ -385,6 +461,7 @@ onMounted(() => {
   parseHash()
   window.addEventListener('hashchange', parseHash)
   loadCatalog()
+  checkReturn() // add this
 })
 onBeforeUnmount(() => {
   window.removeEventListener('hashchange', parseHash)
@@ -765,6 +842,56 @@ onBeforeUnmount(() => {
         </div>
       </footer>
 
+      <div
+        v-if="payResult"
+        class="fixed inset-0 z-[3000] flex items-center justify-center bg-black/50 px-4"
+        role="dialog"
+      >
+        <div class="w-full max-w-md rounded-2xl bg-white p-8 text-center">
+          <template v-if="payResult.state === 'checking'">
+            <i class="fa-solid fa-circle-notch fa-spin text-3xl text-[#E2784A]"></i>
+            <h3 class="mt-4 font-display text-3xl">Confirming your payment…</h3>
+          </template>
+          <template v-else>
+            <i
+              class="fa-solid text-4xl"
+              :class="
+                payResult.state === 'paid'
+                  ? 'fa-circle-check text-[#E2784A]'
+                  : 'fa-circle-info text-[#C4623A]'
+              "
+            ></i>
+            <h3 class="mt-4 font-display text-3xl">
+              {{
+                payResult.state === 'paid'
+                  ? 'Thank you!'
+                  : payResult.state === 'failed'
+                    ? 'Payment not completed'
+                    : 'Still confirming'
+              }}
+            </h3>
+            <p class="mt-2 text-sm text-[#5A413A]">
+              <template v-if="payResult.state === 'paid'">
+                Order <strong>{{ payResult.reference }}</strong> is confirmed. We have sent you an
+                SMS and will update you when it ships.
+              </template>
+              <template v-else-if="payResult.state === 'failed'">
+                You were not charged. Your cart is still saved, so you can try again.
+              </template>
+              <template v-else>
+                We could not confirm order <strong>{{ payResult.reference }}</strong> yet. If you
+                were charged, it will update shortly.
+                <a :href="WHATSAPP" target="_blank" rel="noopener" class="font-semibold underline"
+                  >Message us on WhatsApp</a
+                >
+                if you need help.
+              </template>
+            </p>
+            <button class="btn-dark mt-6" @click="payResult = null">Continue shopping</button>
+          </template>
+        </div>
+      </div>
+
       <!-- TOAST -->
       <transition name="drop">
         <div
@@ -788,11 +915,11 @@ onBeforeUnmount(() => {
       <div class="flex h-full flex-col">
         <div class="flex items-center justify-between px-6 py-5 text-xs text-[#5A413A]">
           <ol class="flex items-center gap-2">
-            <li class="font-semibold text-[#2A1B16]">Cart</li>
+            <li :class="step === 'cart' && 'font-semibold text-[#2A1B16]'">Cart</li>
             <li><i class="fa-solid fa-chevron-right text-[9px]"></i></li>
-            <li>Information</li>
+            <li :class="step === 'info' && 'font-semibold text-[#2A1B16]'">Information</li>
             <li><i class="fa-solid fa-chevron-right text-[9px]"></i></li>
-            <li>Shipping</li>
+            <li>Payment</li>
           </ol>
           <button
             class="p-1 text-lg text-[#2A1B16]"
@@ -803,7 +930,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
-        <div v-if="cart.length" class="flex-1 overflow-y-auto px-6">
+        <div v-if="step === 'cart' && cart.length" class="flex-1 overflow-y-auto px-6">
           <article
             v-for="i in cart"
             :key="i.key"
@@ -833,7 +960,70 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-else class="flex flex-1 flex-col items-center justify-center px-6 text-center">
+        <form
+          v-else-if="step === 'info' && cart.length"
+          class="flex-1 space-y-3 overflow-y-auto px-6 pb-4"
+          @submit.prevent="submitCheckout"
+        >
+          <input v-model="form.name" class="field" placeholder="Full name" autocomplete="name" />
+          <input
+            v-model="form.email"
+            class="field"
+            type="email"
+            placeholder="Email"
+            autocomplete="email"
+          />
+          <input
+            v-model="form.phone"
+            class="field"
+            type="tel"
+            placeholder="Phone (e.g. 0803...)"
+            autocomplete="tel"
+          />
+          <input
+            v-model="form.address"
+            class="field"
+            placeholder="Delivery address"
+            autocomplete="street-address"
+          />
+          <div class="grid grid-cols-2 gap-3">
+            <input
+              v-model="form.city"
+              class="field"
+              placeholder="City"
+              autocomplete="address-level2"
+            />
+            <input
+              v-model="form.state"
+              class="field"
+              placeholder="State"
+              autocomplete="address-level1"
+            />
+          </div>
+          <textarea
+            v-model="form.note"
+            class="field"
+            rows="2"
+            placeholder="Note (optional)"
+          ></textarea>
+          <p v-if="formError" class="text-xs text-[#B63C34]">{{ formError }}</p>
+          <button type="submit" class="btn-dark w-full justify-center" :disabled="paying">
+            {{ paying ? 'REDIRECTING...' : `PAY ${formatKobo(cartTotal)}` }}
+          </button>
+          <button
+            type="button"
+            class="w-full text-xs underline"
+            :disabled="paying"
+            @click="step = 'cart'"
+          >
+            Back to cart
+          </button>
+        </form>
+
+        <div
+          v-else-if="!cart.length"
+          class="flex flex-1 flex-col items-center justify-center px-6 text-center"
+        >
           <span
             class="flex h-16 w-16 items-center justify-center rounded-full bg-[#FFC4A3] text-2xl"
           >
@@ -846,7 +1036,7 @@ onBeforeUnmount(() => {
           <button class="btn-dark mt-6" @click="cartOpen = false">Continue shopping</button>
         </div>
 
-        <div v-if="cart.length" class="border-t border-black/10 px-6 py-6 text-xs">
+       <div v-if="step === 'cart' && cart.length" class="border-t border-black/10 px-6 py-6 text-xs">
           <p class="flex justify-between py-2">
             <span>Items</span><span>{{ formatKobo(cartSubtotal) }}</span>
           </p>
@@ -1121,5 +1311,17 @@ onBeforeUnmount(() => {
 }
 .ap .nav:disabled {
   opacity: 0.4;
+}
+.ap .field {
+  width: 100%;
+  border: 1px solid #e3e3e3;
+  border-radius: 4px;
+  padding: 0.85rem 1rem;
+  font-size: 0.85rem;
+  outline: none;
+  background: #fff;
+}
+.ap .field:focus {
+  border-color: #e2784a;
 }
 </style>
