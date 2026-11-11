@@ -885,7 +885,7 @@ onBeforeUnmount(() => {
             <p class="mt-2 text-sm text-[#5A413A]">
               <template v-if="payResult.state === 'paid'">
                 Order <strong>{{ payResult.reference }}</strong> is confirmed. We have sent you an
-                SMS and will update you when it ships.
+                Email/Sms and will update you when it ships.
               </template>
               <template v-else-if="payResult.state === 'failed'">
                 You were not charged. Your cart is still saved, so you can try again.
