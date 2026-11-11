@@ -290,10 +290,22 @@ function addFromPage() {
 }
 
 /* ---------- Cart ---------- */
-const cartCount = computed(() => cart.value.reduce((s, i) => s + i.qty, 0))
-const cartSubtotal = computed(() => cart.value.reduce((s, i) => s + i.price * i.qty, 0))
-const shipping = 0
-const cartTotal = computed(() => cartSubtotal.value + shipping)
+const cartCount = computed(() =>
+  cart.value.reduce((s, i) => s + i.qty, 0)
+)
+
+const cartSubtotal = computed(() =>
+  cart.value.reduce((s, i) => s + i.price * i.qty, 0)
+)
+
+// All amounts are stored in kobo
+const SHIPPING_FEE = 500000 // ₦5,000
+
+const shipping = SHIPPING_FEE
+
+const cartTotal = computed(() =>
+  cartSubtotal.value + shipping
+)
 
 function addToCart(p, variant, qty) {
   const key = `${p.id}:${variant?.id || 'base'}`
@@ -1036,20 +1048,39 @@ onBeforeUnmount(() => {
           <button class="btn-dark mt-6" @click="cartOpen = false">Continue shopping</button>
         </div>
 
-       <div v-if="step === 'cart' && cart.length" class="border-t border-black/10 px-6 py-6 text-xs">
-          <p class="flex justify-between py-2">
-            <span>Items</span><span>{{ formatKobo(cartSubtotal) }}</span>
-          </p>
-          <p class="flex justify-between py-2">
-            <span>Shipping</span><span>{{ formatKobo(shipping) }}</span>
-          </p>
-          <p class="flex justify-between py-2 font-semibold">
-            <span>Total</span><span>{{ formatKobo(cartTotal) }}</span>
-          </p>
-          <button class="btn-dark mt-4 w-full justify-center" @click="beginCheckout">
-            CONTINUE
-          </button>
-        </div>
+       <div
+  v-if="step === 'cart' && cart.length"
+  class="border-t border-black/10 px-6 py-6 text-xs"
+>
+  <p class="flex justify-between py-2">
+    <span>Items Subtotal</span>
+    <span>{{ formatKobo(cartSubtotal) }}</span>
+  </p>
+
+  <p class="flex justify-between py-2">
+    <span>
+      Delivery Fee
+      <span class="block mt-1 text-[10px] text-[#8A7168]">
+        Flat rate within Lagos
+      </span>
+    </span>
+    <span>{{ formatKobo(shipping) }}</span>
+  </p>
+
+  <div class="my-3 border-t border-black/10"></div>
+
+  <p class="flex justify-between py-2 text-sm font-bold text-[#2A1B16]">
+    <span>Total</span>
+    <span>{{ formatKobo(cartTotal) }}</span>
+  </p>
+
+  <button
+    class="btn-dark mt-4 w-full justify-center"
+    @click="beginCheckout"
+  >
+    CONTINUE
+  </button>
+</div>
       </div>
     </v-navigation-drawer>
   </v-layout>
