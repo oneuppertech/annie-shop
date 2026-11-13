@@ -254,7 +254,11 @@ const matchedVariant = computed(() => {
     ) || null
   )
 })
-const pagePrice = computed(() => selected.value?.price ?? 0)
+const pagePrice = computed(() => {
+  if (!selected.value) return 0
+
+  return matchedVariant.value?.price ?? selected.value.price
+})
 const pageStock = computed(() => {
   const p = selected.value
   if (!p) return 0
