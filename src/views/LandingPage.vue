@@ -498,11 +498,7 @@ onBeforeUnmount(() => {
           @click.prevent="goList"
         >
           <span class="flex items-center gap-3">
-            <span
-              class="flex h-10 w-10 items-center justify-center rounded-full bg-[#FFE6D6] font-display text-sm"
-              >AP</span
-            >
-            <span class="font-semibold">AnniePetars</span>
+            <img src="../assets/annie-peters-logo.png" class="w-20" alt="">
           </span>
         </a>
 
@@ -538,13 +534,20 @@ onBeforeUnmount(() => {
             />
           </label>
 
-          <label class="filter">
-            <select v-model="activeCollection" aria-label="Filter by category">
-              <option value="">Filter by category</option>
-              <option v-for="c in collections" :key="c.slug" :value="c.slug">{{ c.name }}</option>
-            </select>
-            <i class="fa-solid fa-chevron-down pointer-events-none text-xs"></i>
-          </label>
+          <div class="">
+           <v-select
+  v-model="activeCollection"
+  :items="collections"
+  item-title="name"
+  item-value="slug"
+  placeholder="Filter by category"
+  clearable
+  variant="outlined"
+  density="compact"
+  hide-details
+  class="category-select"
+/>
+          </div>
         </div>
 
         <!-- Loading -->
@@ -591,15 +594,15 @@ onBeforeUnmount(() => {
           <article v-for="p in products" :key="p.id" class="group flex flex-col">
             <a
               :href="`#/product/${encodeURIComponent(p.slug || p.id)}`"
-              class="relative block aspect-square overflow-hidden rounded-lg bg-[#FFE6D6]"
+          class="relative block w-full aspect-[3/4] overflow-hidden rounded-lg bg-[#FFF7F1]"
             >
               <img
-                v-if="p.image"
-                :src="p.image"
-                :alt="p.name"
-                loading="lazy"
-                class="h-full w-full object-cover transition duration-500 group-hover:scale-105"
-              />
+  v-if="p.image"
+  :src="p.image"
+  :alt="p.name"
+  loading="lazy"
+  class="absolute inset-0 h-full w-full object-contain"
+ />
               <span v-else class="flex h-full items-center justify-center text-[#C4623A]/50">
                 <i class="fa-solid fa-image text-4xl"></i>
               </span>
@@ -679,30 +682,31 @@ onBeforeUnmount(() => {
           <div>
             <div class="relative">
               <div
-                ref="track"
-                class="flex aspect-square w-full snap-x snap-mandatory overflow-x-auto rounded-lg bg-[#FFE6D6] [scrollbar-width:none]"
-                @scroll.passive="onScroll"
-              >
+  ref="track"
+  class="flex aspect-[3/4] w-full snap-x snap-mandatory overflow-x-auto rounded-lg bg-[#FFF7F1] [scrollbar-width:none]"
+  @scroll.passive="onScroll"
+>
                 <div
-                  v-for="(m, idx) in selected.images"
-                  :key="m.url + idx"
-                  class="h-full w-full shrink-0 snap-center"
-                >
-                  <video
-                    v-if="m.type === 'video'"
-                    :src="m.url"
-                    class="h-full w-full object-cover"
-                    controls
-                    playsinline
-                    preload="metadata"
-                  />
-                  <img
-                    v-else
-                    :src="m.url"
-                    :alt="selected.name"
-                    class="h-full w-full object-cover"
-                  />
-                </div>
+  v-for="(m, idx) in selected.images"
+  :key="m.url + idx"
+  class="relative h-full w-full shrink-0 snap-center"
+>
+  <video
+    v-if="m.type === 'video'"
+    :src="m.url"
+    class="h-full w-full object-contain"
+    controls
+    playsinline
+    preload="metadata"
+  />
+
+  <img
+    v-else
+    :src="m.url"
+    :alt="selected.name"
+    class="absolute inset-0 h-full w-full object-contain p-2"
+  />
+</div>
                 <div
                   v-if="!selected.images.length"
                   class="flex h-full w-full items-center justify-center text-[#C4623A]/50"
@@ -741,7 +745,7 @@ onBeforeUnmount(() => {
                   v-if="m.type === 'image'"
                   :src="m.url"
                   alt=""
-                  class="h-full w-full object-cover"
+                  class="h-full w-full object-contain p-1"
                 />
                 <i v-else class="fa-solid fa-play text-[#2A1B16]"></i>
               </button>
@@ -1358,5 +1362,10 @@ onBeforeUnmount(() => {
 }
 .ap .field:focus {
   border-color: #e2784a;
+}
+.category-select {
+  width: 260px;
+  min-width: 260px;
+  flex-shrink: 0;
 }
 </style>
