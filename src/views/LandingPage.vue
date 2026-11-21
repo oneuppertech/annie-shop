@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import ApiService from '@/services/api'
+import { createCheckout, verifyPayment } from '@/services/checkout'
 
 /* ---------- Config ---------- */
 const LANDING_URL = 'https://anniepetars.com'
@@ -36,6 +37,12 @@ const toast = ref('')
 let toastTimer
 let searchTimer
 let requestId = 0
+
+const step = ref('cart') // 'cart' | 'info'
+const form = ref({ name: '', email: '', phone: '', address: '', city: '', state: '', note: '' })
+const formError = ref('')
+const paying = ref(false)
+const payResult = ref(null) // { state: 'checking'|'paid'|'failed'|'unconfirmed', reference }
 
 /* ---------- Helpers ---------- */
 const formatKobo = (kobo, cur = 'NGN') =>
@@ -73,23 +80,25 @@ function normalizeImages(row) {
   const mapped = list
     .map((i) =>
       typeof i === 'string'
-        ? { url: i, primary: false, order: 0 }
+        ? { url: i, type: 'image', primary: false, order: 0 }
         : {
             url: text(i, 'image_url', 'url'),
+            type: i.media_type === 'video' ? 'video' : 'image',
             primary: !!i.is_primary,
             order: Number(i.sort_order || 0)
           }
     )
     .filter((i) => i.url)
     .sort((a, b) => Number(b.primary) - Number(a.primary) || a.order - b.order)
-    .map((i) => i.url)
+    .map(({ url, type }) => ({ url, type }))
   const single = text(row, 'image_url', 'image', 'primary_image')
-  if (!mapped.length && single) mapped.push(single)
+  if (!mapped.length && single) mapped.push({ url: single, type: 'image' })
   return mapped
 }
 
 function normalizeProduct(row, index) {
   const variantsRaw = row.variants || row.product_variants || []
+
   const variants = (Array.isArray(variantsRaw) ? variantsRaw : [])
     .filter((v) => v.is_active !== false)
     .map((v) => ({
@@ -99,10 +108,13 @@ function normalizeProduct(row, index) {
       price: num(v, 'price_kobo'),
       stock: num(v, 'stock_quantity') ?? 0
     }))
+
   const col = row.collection && typeof row.collection === 'object' ? row.collection : {}
+
   const colName = text(col, 'name') || text(row, 'collection_name')
   const images = normalizeImages(row)
   const name = text(row, 'name', 'title') || 'AnniePetars piece'
+
   return {
     id: row.id || `p-${index}`,
     name,
@@ -113,8 +125,11 @@ function normalizeProduct(row, index) {
     care: text(row, 'care_instructions'),
     price: num(row, 'price_kobo') ?? Math.round((num(row, 'price') || 0) * 100),
     compareAt: num(row, 'compare_at_price_kobo'),
+
+    // Correct image mapping
     images,
-    image: images[0] || '',
+    image: images[0]?.url || '',
+
     collectionName: colName,
     collectionSlug: text(col, 'slug') || text(row, 'collection_slug') || slugify(colName),
     isNew: !!row.is_new_arrival,
@@ -151,6 +166,7 @@ async function loadCatalog({ append = false } = {}) {
   loadError.value = false
   try {
     const res = await ApiService.get(`/catalog-public?${buildQuery(append ? offset.value : 0)}`)
+    console.log('catalog:', res)
     if (id !== requestId) return
     const root = Array.isArray(res) ? { products: res } : res?.data || res || {}
     if (Array.isArray(root.collections) && root.collections.length) {
@@ -240,7 +256,11 @@ const matchedVariant = computed(() => {
     ) || null
   )
 })
-const pagePrice = computed(() => matchedVariant.value?.price ?? selected.value?.price ?? 0)
+const pagePrice = computed(() => {
+  if (!selected.value) return 0
+
+  return matchedVariant.value?.price ?? selected.value.price
+})
 const pageStock = computed(() => {
   const p = selected.value
   if (!p) return 0
@@ -276,10 +296,22 @@ function addFromPage() {
 }
 
 /* ---------- Cart ---------- */
-const cartCount = computed(() => cart.value.reduce((s, i) => s + i.qty, 0))
-const cartSubtotal = computed(() => cart.value.reduce((s, i) => s + i.price * i.qty, 0))
-const shipping = 0
-const cartTotal = computed(() => cartSubtotal.value + shipping)
+const cartCount = computed(() =>
+  cart.value.reduce((s, i) => s + i.qty, 0)
+)
+
+const cartSubtotal = computed(() =>
+  cart.value.reduce((s, i) => s + i.price * i.qty, 0)
+)
+
+// All amounts are stored in kobo
+const SHIPPING_FEE = 500000 // ₦5,000
+
+const shipping = SHIPPING_FEE
+
+const cartTotal = computed(() =>
+  cartSubtotal.value + shipping
+)
 
 function addToCart(p, variant, qty) {
   const key = `${p.id}:${variant?.id || 'base'}`
@@ -337,11 +369,92 @@ function cardMinus(p) {
 }
 
 function beginCheckout() {
-  // TODO: POST cart (variant ids + quantities only, never prices) to a create-order edge function.
-  // The server should re-price from the database, create the order + payment session,
-  // and return a payment URL to redirect to.
-  showToast('Checkout is not connected yet')
+  formError.value = ''
+  step.value = 'info'
 }
+
+async function submitCheckout() {
+  const f = form.value
+  const okEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())
+  if (
+    !f.name.trim() ||
+    !okEmail ||
+    f.phone.replace(/\D/g, '').length < 10 ||
+    !f.address.trim() ||
+    !f.city.trim()
+  ) {
+    formError.value = 'Please fill in your name, email, phone, address and city.'
+    return
+  }
+  paying.value = true
+  formError.value = ''
+  try {
+    const res = await createCheckout({
+      name: f.name.trim(),
+      email: f.email.trim(),
+      phone: f.phone.trim(),
+      note: f.note.trim(),
+      // ids and quantities only; the server prices everything
+      items: cart.value.map((i) => ({
+        productId: i.productId,
+        variantId: i.variantId,
+        qty: i.qty
+      })),
+      shippingAddress: {
+        line1: f.address.trim(),
+        city: f.city.trim(),
+        state: f.state.trim(),
+        country: 'NG',
+        phone: f.phone.trim()
+      }
+    })
+    if (!res?.authorizationUrl) throw new Error('No payment link returned')
+    window.location.href = res.authorizationUrl
+  } catch (e) {
+    formError.value =
+      e?.response?.data?.error || e?.message || 'Could not start payment. Please try again.'
+    paying.value = false
+  }
+}
+
+/* Runs when Paystack sends the customer back to ?reference=AP-XXXX */
+async function checkReturn() {
+  const q = new URLSearchParams(location.search)
+  const ref = q.get('reference') || q.get('trxref')
+  if (!ref) return
+  history.replaceState(null, '', location.pathname + location.hash)
+  payResult.value = { state: 'checking', reference: ref }
+  try {
+    const d = await verifyPayment(ref)
+    if (d?.paid) {
+      emptyCart()
+      payResult.value = { state: 'paid', reference: ref }
+    } else {
+      payResult.value = { state: 'failed', reference: ref }
+    }
+  } catch {
+    // verify failed (network or amount mismatch); the webhook may still settle it
+    payResult.value = { state: 'unconfirmed', reference: ref }
+  }
+}
+
+watch(cartOpen, (open) => {
+  if (!open) step.value = 'cart'
+})
+watch(cartCount, (n) => {
+  if (!n) step.value = 'cart'
+})
+const track = ref(null)
+const onScroll = () => {
+  const t = track.value
+  if (t) activeImage.value = Math.round(t.scrollLeft / t.clientWidth)
+}
+const goTo = (i) => track.value?.scrollTo({ left: i * track.value.clientWidth, behavior: 'smooth' })
+const slide = (d) =>
+  goTo(Math.min(Math.max(activeImage.value + d, 0), selected.value.images.length - 1))
+const pageOnSale = computed(
+  () => !!selected.value?.compareAt && selected.value.compareAt > pagePrice.value
+)
 
 /* ---------- UI plumbing ---------- */
 function showToast(msg) {
@@ -371,6 +484,7 @@ onMounted(() => {
   parseHash()
   window.addEventListener('hashchange', parseHash)
   loadCatalog()
+  checkReturn() // add this
 })
 onBeforeUnmount(() => {
   window.removeEventListener('hashchange', parseHash)
@@ -391,11 +505,7 @@ onBeforeUnmount(() => {
           @click.prevent="goList"
         >
           <span class="flex items-center gap-3">
-            <span
-              class="flex h-10 w-10 items-center justify-center rounded-full bg-[#FFE6D6] font-display text-sm"
-              >AP</span
-            >
-            <span class="font-semibold">AnniePetars</span>
+            <img src="../assets/annie-peters-logo.png" class="w-20" alt="">
           </span>
         </a>
 
@@ -431,13 +541,20 @@ onBeforeUnmount(() => {
             />
           </label>
 
-          <label class="filter">
-            <select v-model="activeCollection" aria-label="Filter by category">
-              <option value="">Filter by category</option>
-              <option v-for="c in collections" :key="c.slug" :value="c.slug">{{ c.name }}</option>
-            </select>
-            <i class="fa-solid fa-chevron-down pointer-events-none text-xs"></i>
-          </label>
+          <div class="">
+           <v-select
+  v-model="activeCollection"
+  :items="collections"
+  item-title="name"
+  item-value="slug"
+  placeholder="Filter by category"
+  clearable
+  variant="outlined"
+  density="compact"
+  hide-details
+  class="category-select"
+/>
+          </div>
         </div>
 
         <!-- Loading -->
@@ -484,15 +601,15 @@ onBeforeUnmount(() => {
           <article v-for="p in products" :key="p.id" class="group flex flex-col">
             <a
               :href="`#/product/${encodeURIComponent(p.slug || p.id)}`"
-              class="relative block aspect-square overflow-hidden rounded-lg bg-[#FFE6D6]"
+          class="relative block w-full aspect-[3/4] overflow-hidden rounded-lg bg-[#FFF7F1]"
             >
               <img
-                v-if="p.image"
-                :src="p.image"
-                :alt="p.name"
-                loading="lazy"
-                class="h-full w-full object-cover transition duration-500 group-hover:scale-105"
-              />
+  v-if="p.image"
+  :src="p.image"
+  :alt="p.name"
+  loading="lazy"
+  class="absolute inset-0 h-full w-full object-contain"
+ />
               <span v-else class="flex h-full items-center justify-center text-[#C4623A]/50">
                 <i class="fa-solid fa-image text-4xl"></i>
               </span>
@@ -517,10 +634,10 @@ onBeforeUnmount(() => {
 
             <div class="mt-2 flex items-center justify-between gap-2">
               <p class="text-xs font-semibold">
-                {{ formatKobo(p.price) }}
-                <span v-if="onSale(p)" class="ml-1 font-normal text-[#5A413A] line-through">{{
+                <span v-if="onSale(p)" class="mr-1 font-normal text-[#5A413A] line-through">{{
                   formatKobo(p.compareAt)
                 }}</span>
+                {{ formatKobo(p.price) }}
               </p>
               <div class="stepper" :class="{ disabled: !productInStock(p) }">
                 <button aria-label="Remove one" :disabled="!qtyInCart(p)" @click="cardMinus(p)">
@@ -570,27 +687,74 @@ onBeforeUnmount(() => {
         <div v-else class="grid gap-10 md:grid-cols-2">
           <!-- Images -->
           <div>
-            <div class="aspect-square w-full overflow-hidden rounded-lg bg-[#FFE6D6]">
-              <img
-                v-if="selected.images[activeImage]"
-                :src="selected.images[activeImage]"
-                :alt="selected.name"
-                class="h-full w-full object-cover"
-              />
-              <div v-else class="flex h-full items-center justify-center text-[#C4623A]/50">
-                <i class="fa-solid fa-image text-5xl"></i>
+            <div class="relative">
+              <div
+  ref="track"
+  class="flex aspect-[3/4] w-full snap-x snap-mandatory overflow-x-auto rounded-lg bg-[#FFF7F1] [scrollbar-width:none]"
+  @scroll.passive="onScroll"
+>
+                <div
+  v-for="(m, idx) in selected.images"
+  :key="m.url + idx"
+  class="relative h-full w-full shrink-0 snap-center"
+>
+  <video
+    v-if="m.type === 'video'"
+    :src="m.url"
+    class="h-full w-full object-contain"
+    controls
+    playsinline
+    preload="metadata"
+  />
+
+  <img
+    v-else
+    :src="m.url"
+    :alt="selected.name"
+    class="absolute inset-0 h-full w-full object-contain p-2"
+  />
+</div>
+                <div
+                  v-if="!selected.images.length"
+                  class="flex h-full w-full items-center justify-center text-[#C4623A]/50"
+                >
+                  <i class="fa-solid fa-image text-5xl"></i>
+                </div>
               </div>
+              <template v-if="selected.images.length > 1">
+                <button
+                  class="nav left-2"
+                  aria-label="Previous"
+                  :disabled="activeImage === 0"
+                  @click="slide(-1)"
+                >
+                  <i class="fa-solid fa-chevron-left text-xs"></i>
+                </button>
+                <button
+                  class="nav right-2"
+                  aria-label="Next"
+                  :disabled="activeImage === selected.images.length - 1"
+                  @click="slide(1)"
+                >
+                  <i class="fa-solid fa-chevron-right text-xs"></i>
+                </button>
+              </template>
             </div>
             <div v-if="selected.images.length > 1" class="mt-4 flex gap-3 overflow-x-auto">
               <button
-                v-for="(img, idx) in selected.images"
-                :key="img + idx"
-                class="h-16 w-16 shrink-0 overflow-hidden rounded-lg border-2 transition"
+                v-for="(m, idx) in selected.images"
+                :key="m.url + idx"
+                class="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border-2 bg-[#FFE6D6] transition"
                 :class="idx === activeImage ? 'border-[#E2784A]' : 'border-transparent opacity-70'"
-                :aria-label="`Show image ${idx + 1}`"
-                @click="activeImage = idx"
+                @click="goTo(idx)"
               >
-                <img :src="img" alt="" class="h-full w-full object-cover" />
+                <img
+                  v-if="m.type === 'image'"
+                  :src="m.url"
+                  alt=""
+                  class="h-full w-full object-contain p-1"
+                />
+                <i v-else class="fa-solid fa-play text-[#2A1B16]"></i>
               </button>
             </div>
           </div>
@@ -599,10 +763,10 @@ onBeforeUnmount(() => {
           <div>
             <h1 class="text-2xl leading-snug md:text-[1.7rem]">{{ selected.name }}</h1>
             <p class="mt-3 flex items-baseline gap-3">
-              <span class="text-2xl font-semibold">{{ formatKobo(pagePrice) }}</span>
-              <span v-if="onSale(selected)" class="text-sm text-[#5A413A] line-through">{{
+              <span v-if="pageOnSale" class="text-sm text-[#5A413A] line-through">{{
                 formatKobo(selected.compareAt)
               }}</span>
+              <span class="text-2xl font-semibold">{{ formatKobo(pagePrice) }}</span>
             </p>
 
             <div class="mt-6">
@@ -705,6 +869,56 @@ onBeforeUnmount(() => {
         </div>
       </footer>
 
+      <div
+        v-if="payResult"
+        class="fixed inset-0 z-[3000] flex items-center justify-center bg-black/50 px-4"
+        role="dialog"
+      >
+        <div class="w-full max-w-md rounded-2xl bg-white p-8 text-center">
+          <template v-if="payResult.state === 'checking'">
+            <i class="fa-solid fa-circle-notch fa-spin text-3xl text-[#E2784A]"></i>
+            <h3 class="mt-4 font-display text-3xl">Confirming your payment…</h3>
+          </template>
+          <template v-else>
+            <i
+              class="fa-solid text-4xl"
+              :class="
+                payResult.state === 'paid'
+                  ? 'fa-circle-check text-[#E2784A]'
+                  : 'fa-circle-info text-[#C4623A]'
+              "
+            ></i>
+            <h3 class="mt-4 font-display text-3xl">
+              {{
+                payResult.state === 'paid'
+                  ? 'Thank you!'
+                  : payResult.state === 'failed'
+                    ? 'Payment not completed'
+                    : 'Still confirming'
+              }}
+            </h3>
+            <p class="mt-2 text-sm text-[#5A413A]">
+              <template v-if="payResult.state === 'paid'">
+                Order <strong>{{ payResult.reference }}</strong> is confirmed. We have sent you an
+                Email/Sms and will update you when it ships.
+              </template>
+              <template v-else-if="payResult.state === 'failed'">
+                You were not charged. Your cart is still saved, so you can try again.
+              </template>
+              <template v-else>
+                We could not confirm order <strong>{{ payResult.reference }}</strong> yet. If you
+                were charged, it will update shortly.
+                <a :href="WHATSAPP" target="_blank" rel="noopener" class="font-semibold underline"
+                  >Message us on WhatsApp</a
+                >
+                if you need help.
+              </template>
+            </p>
+            <button class="btn-dark mt-6" @click="payResult = null">Continue shopping</button>
+          </template>
+        </div>
+      </div>
+
       <!-- TOAST -->
       <transition name="drop">
         <div
@@ -728,11 +942,11 @@ onBeforeUnmount(() => {
       <div class="flex h-full flex-col">
         <div class="flex items-center justify-between px-6 py-5 text-xs text-[#5A413A]">
           <ol class="flex items-center gap-2">
-            <li class="font-semibold text-[#2A1B16]">Cart</li>
+            <li :class="step === 'cart' && 'font-semibold text-[#2A1B16]'">Cart</li>
             <li><i class="fa-solid fa-chevron-right text-[9px]"></i></li>
-            <li>Information</li>
+            <li :class="step === 'info' && 'font-semibold text-[#2A1B16]'">Information</li>
             <li><i class="fa-solid fa-chevron-right text-[9px]"></i></li>
-            <li>Shipping</li>
+            <li>Payment</li>
           </ol>
           <button
             class="p-1 text-lg text-[#2A1B16]"
@@ -743,7 +957,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
-        <div v-if="cart.length" class="flex-1 overflow-y-auto px-6">
+        <div v-if="step === 'cart' && cart.length" class="flex-1 overflow-y-auto px-6">
           <article
             v-for="i in cart"
             :key="i.key"
@@ -773,7 +987,70 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-else class="flex flex-1 flex-col items-center justify-center px-6 text-center">
+        <form
+          v-else-if="step === 'info' && cart.length"
+          class="flex-1 space-y-3 overflow-y-auto px-6 pb-4"
+          @submit.prevent="submitCheckout"
+        >
+          <input v-model="form.name" class="field" placeholder="Full name" autocomplete="name" />
+          <input
+            v-model="form.email"
+            class="field"
+            type="email"
+            placeholder="Email"
+            autocomplete="email"
+          />
+          <input
+            v-model="form.phone"
+            class="field"
+            type="tel"
+            placeholder="Phone (e.g. 0803...)"
+            autocomplete="tel"
+          />
+          <input
+            v-model="form.address"
+            class="field"
+            placeholder="Delivery address"
+            autocomplete="street-address"
+          />
+          <div class="grid grid-cols-2 gap-3">
+            <input
+              v-model="form.city"
+              class="field"
+              placeholder="City"
+              autocomplete="address-level2"
+            />
+            <input
+              v-model="form.state"
+              class="field"
+              placeholder="State"
+              autocomplete="address-level1"
+            />
+          </div>
+          <textarea
+            v-model="form.note"
+            class="field"
+            rows="2"
+            placeholder="Note (optional)"
+          ></textarea>
+          <p v-if="formError" class="text-xs text-[#B63C34]">{{ formError }}</p>
+          <button type="submit" class="btn-dark w-full justify-center" :disabled="paying">
+            {{ paying ? 'REDIRECTING...' : `PAY ${formatKobo(cartTotal)}` }}
+          </button>
+          <button
+            type="button"
+            class="w-full text-xs underline"
+            :disabled="paying"
+            @click="step = 'cart'"
+          >
+            Back to cart
+          </button>
+        </form>
+
+        <div
+          v-else-if="!cart.length"
+          class="flex flex-1 flex-col items-center justify-center px-6 text-center"
+        >
           <span
             class="flex h-16 w-16 items-center justify-center rounded-full bg-[#FFC4A3] text-2xl"
           >
@@ -786,20 +1063,39 @@ onBeforeUnmount(() => {
           <button class="btn-dark mt-6" @click="cartOpen = false">Continue shopping</button>
         </div>
 
-        <div v-if="cart.length" class="border-t border-black/10 px-6 py-6 text-xs">
-          <p class="flex justify-between py-2">
-            <span>Items</span><span>{{ formatKobo(cartSubtotal) }}</span>
-          </p>
-          <p class="flex justify-between py-2">
-            <span>Shipping</span><span>{{ formatKobo(shipping) }}</span>
-          </p>
-          <p class="flex justify-between py-2 font-semibold">
-            <span>Total</span><span>{{ formatKobo(cartTotal) }}</span>
-          </p>
-          <button class="btn-dark mt-4 w-full justify-center" @click="beginCheckout">
-            CONTINUE
-          </button>
-        </div>
+       <div
+  v-if="step === 'cart' && cart.length"
+  class="border-t border-black/10 px-6 py-6 text-xs"
+>
+  <p class="flex justify-between py-2">
+    <span>Items Subtotal</span>
+    <span>{{ formatKobo(cartSubtotal) }}</span>
+  </p>
+
+  <p class="flex justify-between py-2">
+    <span>
+      Delivery Fee
+      <span class="block mt-1 text-[10px] text-[#8A7168]">
+        Flat rate within Lagos
+      </span>
+    </span>
+    <span>{{ formatKobo(shipping) }}</span>
+  </p>
+
+  <div class="my-3 border-t border-black/10"></div>
+
+  <p class="flex justify-between py-2 text-sm font-bold text-[#2A1B16]">
+    <span>Total</span>
+    <span>{{ formatKobo(cartTotal) }}</span>
+  </p>
+
+  <button
+    class="btn-dark mt-4 w-full justify-center"
+    @click="beginCheckout"
+  >
+    CONTINUE
+  </button>
+</div>
       </div>
     </v-navigation-drawer>
   </v-layout>
@@ -1046,5 +1342,37 @@ onBeforeUnmount(() => {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+.ap .nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ap .nav:disabled {
+  opacity: 0.4;
+}
+.ap .field {
+  width: 100%;
+  border: 1px solid #e3e3e3;
+  border-radius: 4px;
+  padding: 0.85rem 1rem;
+  font-size: 0.85rem;
+  outline: none;
+  background: #fff;
+}
+.ap .field:focus {
+  border-color: #e2784a;
+}
+.category-select {
+  width: 260px;
+  min-width: 260px;
+  flex-shrink: 0;
 }
 </style>

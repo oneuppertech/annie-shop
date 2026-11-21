@@ -1,5 +1,5 @@
 import ApiService from '@/services/api'
-
+import { supabase } from '@/services/supabase'
 const BASE = '/admin-inventory'
 const un = (r) => r?.data ?? r
 const qs = (o) =>
@@ -15,7 +15,43 @@ export const inventoryApi = {
     const fd = new FormData()
     fd.append('file', file)
     return ApiService.upload(BASE, fd)
+  },
+  uploadMedia: async (file) => {
+  if (file.type.startsWith('image/')) {
+    return inventoryApi.uploadImage(file)
   }
+
+  if (!file.type.startsWith('video/')) {
+    throw new Error('Unsupported media format')
+  }
+
+  const signed = await inventoryApi.act('sign_upload', {
+    content_type: file.type
+  })
+
+  const { data, error } = await supabase.storage
+    .from('product-images')
+    .uploadToSignedUrl(
+      signed.path,
+      signed.token,
+      file,
+      {
+        contentType: file.type,
+        upsert: false
+      }
+    )
+
+  if (error) {
+    console.error('Video upload failed:', error)
+    throw new Error(error.message)
+  }
+
+  return {
+    url: signed.url,
+    path: data.path,
+    media_type: 'video'
+  }
+}
 }
 
 export const errMsg = (e) => e?.response?.data?.error || e?.message || 'Something went wrong'

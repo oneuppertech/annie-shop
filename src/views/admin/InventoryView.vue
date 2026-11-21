@@ -4,6 +4,7 @@ import { inventoryApi, errMsg } from '@/services/inventory'
 import ProductsPanel from '@/components/admin/inventory/ProductsPanel.vue'
 import CollectionsPanel from '@/components/admin/inventory/CollectionsPanel.vue'
 import StockPanel from '@/components/admin/inventory/StockPanel.vue'
+import MainLayout from '@/layouts/MainLayout.vue'
 
 const tab = ref('products')
 const collections = ref([])
@@ -25,8 +26,8 @@ onMounted(loadCollections)
 </script>
 
 <template>
-  <div class="mx-auto max-w-7xl p-4 md:p-6">
-    <img src="../../assets/annie-peters-logo.png" class="w-20" alt="">
+  <MainLayout>
+       <div class="mx-auto p-4 md:p-6">
     <h1 class="mb-4 text-2xl font-semibold">Inventory</h1>
 
     <v-tabs v-model="tab" color="primary" class="mb-6">
@@ -41,4 +42,6 @@ onMounted(loadCollections)
 
     <v-snackbar v-model="snack.show" :color="snack.color" timeout="3000">{{ snack.text }}</v-snackbar>
   </div>
+  </MainLayout>
+ 
 </template>

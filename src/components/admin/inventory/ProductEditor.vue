@@ -21,7 +21,7 @@ const blank = () => ({
 
 const tab = ref('details')
 const form = ref(blank())
-const images = ref([])
+const images = ref([]) // now holds images and videos (media_type)
 const variants = ref([])
 const loading = ref(false)
 const saving = ref(false)
@@ -54,9 +54,13 @@ const close = () => emit('update:modelValue', false)
 
 async function save() {
   if (!form.value.name.trim()) { tab.value = 'details'; return notify('Product name is required', 'error') }
+  const f = form.value
+  if (f.compare_at_price && Number(f.compare_at_price) <= Number(f.price)) {
+    tab.value = 'details'
+    return notify('Original price must be higher than the selling price', 'error')
+  }
   saving.value = true
   try {
-    const f = form.value
     await inventoryApi.act('save_product', {
       id: props.productId || undefined,
       product: {
@@ -102,7 +106,7 @@ async function remove() {
       </v-card-title>
       <v-tabs v-model="tab" class="border-b">
         <v-tab value="details">Details</v-tab>
-        <v-tab value="images">Images ({{ images.length }})</v-tab>
+        <v-tab value="images">Media ({{ images.length }})</v-tab>
         <v-tab value="variants">Variants & stock ({{ variants.length }})</v-tab>
       </v-tabs>
 
@@ -113,12 +117,12 @@ async function remove() {
           <v-text-field variant="outlined" color="primary" v-model="form.name" label="Name *" class="md:col-span-2" hide-details="auto" />
           <v-text-field variant="outlined" color="primary" v-model="form.slug" label="Slug (auto from name if empty)" hide-details />
           <v-text-field variant="outlined" color="primary" v-model="form.sku" label="SKU" hide-details />
-          <v-select variant="outlined" color="primary"v-model="form.collection_id" label="Collection" clearable hide-details
+          <v-select variant="outlined" color="primary" v-model="form.collection_id" label="Collection" clearable hide-details
             :items="collections.map((c) => ({ title: c.name, value: c.id }))" />
           <v-combobox variant="outlined" color="primary" v-model="form.product_type" label="Product type" hide-details
             :items="['ready_to_wear','occasion_wear','bridal','aso_ebi','made_to_measure','girl_child']" />
-          <v-text-field variant="outlined" color="primary" v-model.number="form.price" label="Price (₦)" type="number" min="0" hide-details />
-          <v-text-field variant="outlined" color="primary" v-model.number="form.compare_at_price" label="Compare-at price (₦, optional)" type="number" min="0" hide-details />
+          <v-text-field variant="outlined" color="primary" v-model.number="form.price" label="Selling / promo price (₦)" type="number" min="0" hide-details />
+          <v-text-field variant="outlined" color="primary" v-model.number="form.compare_at_price" label="Original price (₦), set only for a discount" type="number" min="0" hide-details />
           <v-select variant="outlined" color="primary" v-model="form.status" label="Status" hide-details
             :items="[{title:'Draft',value:'draft'},{title:'Active (visible in shop)',value:'active'},{title:'Archived',value:'archived'}]" />
           <v-text-field variant="outlined" color="primary" v-model="form.fabric" label="Fabric" hide-details />

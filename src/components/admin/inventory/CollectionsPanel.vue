@@ -1,6 +1,7 @@
 <script setup>
 import { ref, inject } from 'vue'
 import { inventoryApi, errMsg } from '@/services/inventory'
+import ImageManager from './ImageManager.vue'
 
 const props = defineProps({ collections: { type: Array, default: () => [] } })
 const emit = defineEmits(['changed'])
@@ -8,14 +9,23 @@ const notify = inject('notify')
 
 const dialog = ref(false)
 const saving = ref(false)
-const uploading = ref(false)
-const fileInput = ref(null)
+const media = ref([])
 const blank = () => ({ name: '', slug: '', tagline: '', description: '', image_url: '', is_active: true, seo_title: '', seo_description: '' })
 const form = ref(blank())
 
 function openForm(c = null) {
   form.value = c ? { ...blank(), ...Object.fromEntries(Object.entries(c).map(([k, v]) => [k, v ?? ''])) } : blank()
+  media.value = c?.collection_media?.length
+    ? [...c.collection_media].sort((a, b) => a.sort_order - b.sort_order)
+    : c?.image_url
+      ? [{ image_url: c.image_url, alt_text: '', media_type: 'image', is_primary: true }] // legacy cover image
+      : []
   dialog.value = true
+}
+
+async function saveForm() {
+  const cover = media.value.find((m) => m.is_primary && m.media_type !== 'video') || media.value.find((m) => m.media_type !== 'video')
+  await save({ ...form.value, image_url: cover?.image_url || '', media: media.value })
 }
 
 async function save(payload = form.value) {
@@ -61,20 +71,6 @@ async function remove(c, force = false) {
     if (e?.response?.status !== 409) notify(errMsg(e), 'error')
   }
 }
-
-async function onFile(e) {
-  const file = e.target.files[0]
-  e.target.value = ''
-  if (!file) return
-  uploading.value = true
-  try {
-    form.value.image_url = (await inventoryApi.uploadImage(file)).url
-  } catch (err) {
-    notify(errMsg(err), 'error')
-  } finally {
-    uploading.value = false
-  }
-}
 </script>
 
 <template>
@@ -94,7 +90,9 @@ async function onFile(e) {
         <div v-else class="h-14 w-14 rounded bg-gray-100" />
         <div class="min-w-0 flex-1">
           <p class="font-medium">{{ c.name }}</p>
-          <p class="truncate text-xs text-gray-500">{{ c.tagline || c.slug }} · {{ c.product_count }} products</p>
+          <p class="truncate text-xs text-gray-500">
+            {{ c.tagline || c.slug }} · {{ c.product_count }} products · {{ c.collection_media?.length || 0 }} media
+          </p>
         </div>
         <v-switch :model-value="c.is_active" color="primary" hide-details density="compact" @update:model-value="toggleActive(c)" />
         <v-btn icon="mdi-pencil" size="small" variant="text" @click="openForm(c)" />
@@ -102,19 +100,14 @@ async function onFile(e) {
       </div>
     </div>
 
-    <v-dialog v-model="dialog" max-width="640" scrollable>
+    <v-dialog v-model="dialog" max-width="760" scrollable>
       <v-card class="pa-4" :title="form.id ? 'Edit collection' : 'New collection'">
         <v-card-text class="grid gap-4 mt-2">
           <v-text-field variant="outlined" class="mt-4" color="primary" v-model="form.name" label="Name *" hide-details />
           <v-text-field variant="outlined" color="primary" v-model="form.slug" label="Slug (auto from name if empty)" hide-details />
           <v-text-field variant="outlined" color="primary" v-model="form.tagline" label="Tagline" hide-details />
           <v-textarea variant="outlined" color="primary" v-model="form.description" label="Description" rows="3" auto-grow hide-details />
-          <div class="flex items-center gap-3">
-            <img v-if="form.image_url" :src="form.image_url" class="h-16 w-16 rounded object-cover" alt="" />
-            <input ref="fileInput" type="file" accept="image/*" hidden @change="onFile" />
-            <v-btn :loading="uploading" size="small" @click="fileInput.click()">Upload image</v-btn>
-            <v-text-field variant="outlined" color="primary" v-model="form.image_url" label="or image URL / path" density="compact" hide-details />
-          </div>
+          <ImageManager v-model="media" />
           <v-switch v-model="form.is_active" label="Visible in shop" color="primary" hide-details density="compact" />
           <v-text-field variant="outlined" color="primary" v-model="form.seo_title" label="SEO title" hide-details />
           <v-text-field variant="outlined" color="primary" v-model="form.seo_description" label="SEO description" hide-details />
@@ -122,7 +115,7 @@ async function onFile(e) {
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="dialog = false">Cancel</v-btn>
-          <v-btn color="primary" :loading="saving" @click="save()">Save</v-btn>
+          <v-btn color="primary" :loading="saving" @click="saveForm">Save</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
