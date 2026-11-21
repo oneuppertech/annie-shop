@@ -304,21 +304,20 @@ const cartSubtotal = computed(() =>
   cart.value.reduce((s, i) => s + i.price * i.qty, 0)
 )
 
-// All amounts are stored in kobo
-const SHIPPING_FEE = 500000 // ₦5,000
+const cartCurrency = computed(() => cart.value[0]?.currency || 'NGN')
+// Display only. The server (shop_settings.delivery_fees) is the source of truth, so keep these in sync.
+const DELIVERY_FEES = { NGN: 500000, USD: 2500, GBP: 2000, EUR: 2300 }
+const shipping = computed(() => DELIVERY_FEES[cartCurrency.value] ?? 0)
 
-const shipping = SHIPPING_FEE
-
-const cartTotal = computed(() =>
-  cartSubtotal.value + shipping
-)
+const cartTotal = computed(() => cartSubtotal.value + shipping.value)
 
 function addToCart(p, variant, qty) {
   const key = `${p.id}:${variant?.id || 'base'}`
   const max = p.backorder || !variant ? 99 : Math.max(variant.stock, 0)
   const existing = cart.value.find((i) => i.key === key)
-  if (cart.value.length && cart.value[0].currency !== p.currency) {
-  showToast(`Your cart is in ${cart.value[0].currency}. Empty it to buy in ${p.currency}.`)
+  const cartCur = cart.value[0]?.currency || 'NGN'
+if (cart.value.length && cartCur !== p.currency) {
+  showToast(`Your cart is in ${cartCur}. Empty it to buy in ${p.currency}.`)
   return
 }
   if (existing) {
@@ -335,7 +334,7 @@ function addToCart(p, variant, qty) {
       price: variant?.price ?? p.price,
       qty,
       max,
-      currency: p.currency,
+      currency: p.currency || 'NGN'
     })
   }
   showToast(`${p.name} added to your cart`)
@@ -635,9 +634,9 @@ onBeforeUnmount(() => {
             <div class="mt-2 flex items-center justify-between gap-2">
               <p class="text-xs font-semibold">
                 <span v-if="onSale(p)" class="mr-1 font-normal text-[#5A413A] line-through">{{
-                  formatKobo(p.compareAt)
+                  formatKobo(p.compareAt, p.currency)
                 }}</span>
-                {{ formatKobo(p.price) }}
+                {{ formatKobo(p.price, p.currency) }}
               </p>
               <div class="stepper" :class="{ disabled: !productInStock(p) }">
                 <button aria-label="Remove one" :disabled="!qtyInCart(p)" @click="cardMinus(p)">
@@ -764,9 +763,9 @@ onBeforeUnmount(() => {
             <h1 class="text-2xl leading-snug md:text-[1.7rem]">{{ selected.name }}</h1>
             <p class="mt-3 flex items-baseline gap-3">
               <span v-if="pageOnSale" class="text-sm text-[#5A413A] line-through">{{
-                formatKobo(selected.compareAt)
+                formatKobo(selected.compareAt, selected.currency)
               }}</span>
-              <span class="text-2xl font-semibold">{{ formatKobo(pagePrice) }}</span>
+              <span class="text-2xl font-semibold">{{ formatKobo(pagePrice, selected.currency) }}</span>
             </p>
 
             <div class="mt-6">
@@ -968,7 +967,7 @@ onBeforeUnmount(() => {
               <p v-if="i.size || i.colour" class="mt-2">
                 {{ [i.size, i.colour].filter(Boolean).join(', ') }}
               </p>
-              <p class="mt-2">{{ formatKobo(i.price) }}</p>
+              <p class="mt-2">{{ formatKobo(i.price, i.currency) }}</p>
               <button class="mt-2 text-[#B63C34] hover:underline" @click="removeItem(i.key)">
                 Remove
               </button>
@@ -1035,7 +1034,7 @@ onBeforeUnmount(() => {
           ></textarea>
           <p v-if="formError" class="text-xs text-[#B63C34]">{{ formError }}</p>
           <button type="submit" class="btn-dark w-full justify-center" :disabled="paying">
-            {{ paying ? 'REDIRECTING...' : `PAY ${formatKobo(cartTotal)}` }}
+            {{ paying ? 'REDIRECTING...' : `PAY ${formatKobo(cartTotal, cartCurrency)}` }}
           </button>
           <button
             type="button"
@@ -1068,27 +1067,28 @@ onBeforeUnmount(() => {
   class="border-t border-black/10 px-6 py-6 text-xs"
 >
   <p class="flex justify-between py-2">
-    <span>Items Subtotal</span>
-    <span>{{ formatKobo(cartSubtotal) }}</span>
-  </p>
+  <span>Items Subtotal</span>
+  <span>{{ formatKobo(cartSubtotal, cartCurrency) }}</span>
+</p>
 
-  <p class="flex justify-between py-2">
-    <span>
-      Delivery Fee
-      <span class="block mt-1 text-[10px] text-[#8A7168]">
-        Flat rate within Lagos
-      </span>
+<p class="flex justify-between py-2">
+  <span>
+    Delivery Fee
+    <span v-if="cartCurrency === 'NGN'" class="mt-1 block text-[10px] text-[#8A7168]">
+      Flat rate within Lagos
     </span>
-    <span>{{ formatKobo(shipping) }}</span>
-  </p>
+  </span>
+  <span>{{ formatKobo(shipping, cartCurrency) }}</span>
+</p>
 
-  <div class="my-3 border-t border-black/10"></div>
+<div class="my-3 border-t border-black/10"></div>
 
-  <p class="flex justify-between py-2 text-sm font-bold text-[#2A1B16]">
-    <span>Total</span>
-    <span>{{ formatKobo(cartTotal) }}</span>
-  </p>
+<p class="flex justify-between py-2 text-sm font-bold text-[#2A1B16]">
+  <span>Total</span>
+  <span>{{ formatKobo(cartTotal, cartCurrency) }}</span>
+</p>
 
+  
   <button
     class="btn-dark mt-4 w-full justify-center"
     @click="beginCheckout"
