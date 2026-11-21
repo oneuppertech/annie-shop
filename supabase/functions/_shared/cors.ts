@@ -6,6 +6,8 @@ const allowedOrigins = [
   'http://shop.anniepetars.com',
   'https://anniepetars.com',
   'https://www.anniepetars.com',
+  'https://annie-shop.vercel.app',
+  
 ]
 export function getCorsHeaders(req: Request): Record<string,string> {
   const origin=req.headers.get('origin') || ''
